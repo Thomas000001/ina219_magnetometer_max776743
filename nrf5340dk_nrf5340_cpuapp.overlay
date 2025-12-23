@@ -1,0 +1,53 @@
+
+&i2c1 {
+	status = "okay";
+	// compatible = "st,stm32-i2c-v1";
+	compatible = "nordic,nrf-twim";
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+	// clock-frequency = <100000>;
+	pinctrl-0 = <&i2c1_default>;
+    pinctrl-1 = <&i2c1_sleep>;
+    pinctrl-names = "default", "sleep";
+
+    icm20948: icm20948@68{
+        compatible = "invensense,icm20948";
+        reg = <0x68>;
+		status = "okay";
+    };
+    ina219@40 {
+		status = "okay";
+		compatible = "ti,ina219";
+		reg = <0x40>;
+		brng = <0>;
+		pg = <0>;
+		sadc = <11>;
+		badc = <11>;
+		shunt-milliohm = <100>;
+		lsb-microamp = <10>;
+	};
+	max77643: max77643@48 {
+        compatible = "adi,max77643";
+        // compatible = "i2c-device";
+        reg = <0x48>;
+        status = "okay";
+        regulators {
+            compatible = "adi,max77643-regulator";
+            SBB0 {
+                regulator-boot-on;
+                regulator-min-microvolt = <500000>;   // 0.5V
+                regulator-max-microvolt = <5500000>;  // 5.5V
+            };
+            SBB1 {
+                regulator-boot-on;
+                regulator-min-microvolt = <500000>;   // 0.5V
+                regulator-max-microvolt = <5500000>;  // 5.5V
+            };
+            SBB2 {
+                regulator-boot-on;
+                regulator-min-microvolt = <500000>;   // 0.5V
+                regulator-max-microvolt = <5500000>;  // 5.5V
+            };
+        };
+    };
+};
+

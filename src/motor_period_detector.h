@@ -23,7 +23,7 @@
 #define MIN_PERIOD_MS           50     // 最小有效週期 (ms)
 #define MAX_PERIOD_MS           1000    // 最大有效週期 (ms)
 #define PEAK_DETECTION_WINDOW   5       // 峰值檢測窗口大小
-#define MIN_SAMPLES_PER_PERIOD  10      // 每週期最少樣本數
+#define MIN_SAMPLES_PER_PERIOD  5      // 每週期最少樣本數
 
 /* ============ 檢測方法選擇 ============ */
 typedef enum {

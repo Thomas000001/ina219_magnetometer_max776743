@@ -24,7 +24,7 @@ LOG_MODULE_REGISTER(period_detector, LOG_LEVEL_ERR);
  * @brief 計算週期統計數據
  */
 static void calculate_period_statistics(motor_period_detector_t *detector, 
-                                         float end_time) {
+                                         float start_time, float end_time, float peak_current) {
     period_data_t *pd = &detector->last_period;
     int n = detector->buffer_idx;
     
@@ -54,11 +54,12 @@ static void calculate_period_statistics(motor_period_detector_t *detector,
     /* 填充週期數據 */
     pd->sample_count = n;
     // pd->start_time = detector->time_buffer[0];
-    pd->start_time = detector->last_peak_time; //使用上一個峰值時間作為開始，當前峰值時間作為結束
+    // pd->start_time = detector->last_peak_time; //使用上一個峰值時間作為開始，當前峰值時間作為結束
+    pd->start_time = start_time;
     pd->end_time = end_time;
-    pd->period_time = end_time - detector->last_peak_time;
+    pd->period_time = end_time - start_time;
     pd->average_current = sum / n;
-    pd->peak_current = max_val;
+    pd->peak_current = peak_current;
     pd->min_current = min_val;
     pd->rms_current = sqrtf(sum_sq / n);
     pd->voltage = voltage_sum / n;
@@ -157,8 +158,12 @@ static bool process_peak_detection(motor_period_detector_t *detector,
                 float time_diff_ms = time_diff * 1000.0f;
                 
                 if (time_diff_ms >= MIN_PERIOD_MS && time_diff_ms <= MAX_PERIOD_MS) {
+                    /* ====== 在 reset 之前，先保存當前峰值資訊 ====== */
+                    float this_peak_value = detector->current_max;
+                    float this_peak_time = detector->current_max_time;
+                    
                     /* 有效週期完成 */
-                    calculate_period_statistics(detector, detector->current_max_time);
+                    calculate_period_statistics(detector, detector->last_peak_time, this_peak_time, this_peak_value);
                     
                     if (detector->last_period.valid) {
                         period_complete = true;
@@ -245,7 +250,12 @@ static bool process_zero_crossing(motor_period_detector_t *detector,
                 float time_diff_ms = time_diff * 1000.0f;
                 
                 if (time_diff_ms >= MIN_PERIOD_MS && time_diff_ms <= MAX_PERIOD_MS) {
-                    calculate_period_statistics(detector, timestamp);
+                    float this_peak_value = detector->current_max;
+                    
+                    calculate_period_statistics(detector,
+                                                detector->last_peak_time,  // 上一個零交叉時間
+                                                timestamp,                  // 當前零交叉時間
+                                                this_peak_value);           // 週期內的峰值電流
                     
                     if (detector->last_period.valid) {
                         period_complete = true;
@@ -322,7 +332,12 @@ static bool process_threshold(motor_period_detector_t *detector,
                 float time_diff_ms = time_diff * 1000.0f;
                 
                 if (time_diff_ms >= MIN_PERIOD_MS && time_diff_ms <= MAX_PERIOD_MS) {
-                    calculate_period_statistics(detector, timestamp);
+                    float this_peak_value = detector->current_max;
+                    
+                    calculate_period_statistics(detector,
+                                                detector->last_peak_time,  // 上一個零交叉時間
+                                                timestamp,                  // 當前零交叉時間
+                                                this_peak_value);           // 週期內的峰值電流
                     
                     if (detector->last_period.valid) {
                         period_complete = true;

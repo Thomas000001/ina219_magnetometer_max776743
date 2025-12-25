@@ -137,13 +137,13 @@ static bool process_peak_detection(motor_period_detector_t *detector,
                 detector->last_peak_time = detector->current_max_time;
                 detector->state = STATE_COLLECTING;
                 
-                /* 重置緩衝區並開始收集 */
-                reset_period_buffer(detector);
-                add_sample_to_buffer(detector, current, voltage, timestamp);
-                
                 LOG_DBG("First peak detected: %.2f mA at %.3f s", 
                         (double)detector->last_peak_value, 
                         (double)detector->last_peak_time);
+                        
+                /* 重置緩衝區並開始收集 */
+                reset_period_buffer(detector);
+                add_sample_to_buffer(detector, current, voltage, timestamp);
             }
             break;
             
@@ -183,7 +183,7 @@ static bool process_peak_detection(motor_period_detector_t *detector,
                 }
                 
                 /* 重置最大值追蹤 */
-                detector->current_max = -1e10f;
+                detector->current_max = current;
                 detector->current_max_time = timestamp;
                 detector->samples_since_max = 0;
             }

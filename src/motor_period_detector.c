@@ -53,9 +53,10 @@ static void calculate_period_statistics(motor_period_detector_t *detector,
     
     /* 填充週期數據 */
     pd->sample_count = n;
-    pd->start_time = detector->time_buffer[0];
+    // pd->start_time = detector->time_buffer[0];
+    pd->start_time = detector->last_peak_time; //使用上一個峰值時間作為開始，當前峰值時間作為結束
     pd->end_time = end_time;
-    pd->period_time = end_time - pd->start_time;
+    pd->period_time = end_time - detector->last_peak_time;
     pd->average_current = sum / n;
     pd->peak_current = max_val;
     pd->min_current = min_val;
@@ -177,7 +178,7 @@ static bool process_peak_detection(motor_period_detector_t *detector,
                 }
                 
                 /* 重置最大值追蹤 */
-                detector->current_max = current;
+                detector->current_max = -1e10f;
                 detector->current_max_time = timestamp;
                 detector->samples_since_max = 0;
             }

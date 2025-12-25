@@ -454,7 +454,7 @@ static const struct gpio_dt_spec led2 = GPIO_DT_SPEC_GET(LED2_NODE, gpios);
 #define FINAL_VOLTAGE_V         0.5f
 #define VOLTAGE_STEP_V          0.2f
 #define STEP_INTERVAL_SEC       15
-#define HOLD_TIME_MIN           5
+#define HOLD_TIME_MIN           1
 
 /* ============ INA219 配置參數 ============ */
 #define INA219_SHUNT_RESISTANCE    0.1f
@@ -517,7 +517,7 @@ static volatile bool period_result_ready = false;
 static period_data_t period_result_cache;
 
 /* ============ 移動平均濾波器 ============ */
-#define CURRENT_FILTER_SIZE 4
+#define CURRENT_FILTER_SIZE 8
 
 typedef struct {
     float values[CURRENT_FILTER_SIZE];
@@ -751,20 +751,29 @@ void ina219_read_thread_entry(void *arg1, void *arg2, void *arg3) {
 
         // 輸出資料
         k_mutex_lock(&uart_mutex, K_FOREVER);
-        // printf("T:%.5f,C:%.4f,V:%.4f\n",
-        //        (double)elapsed_seconds,
-        //        (double)filtered_current,
-        //        (double)voltage_for_calc);
+        printf("T:%.5f,C:%.4f,V:%.4f\n",
+               (double)elapsed_seconds,
+               (double)filtered_current,
+               (double)voltage_for_calc);
 
         // 如果有新的週期檢測結果，輸出
         if (period_result_ready) {
-            printf("P:%.4f,AVG:%.2f,PEAK:%.2f,E:%.4f,N:%d,CNT:%d\n",
+            // printf("P:%.4f,AVG:%.2f,PEAK:%.2f,E:%.4f,N:%d,CNT:%d\n",
+            //        (double)period_result_cache.period_time,
+            //        (double)period_result_cache.average_current,
+            //        (double)period_result_cache.peak_current,
+            //        (double)period_result_cache.energy,
+            //        period_result_cache.sample_count,
+            //        periods_completed);
+            printf("P:%.4f,AVG:%.2f,PEAK:%.2f,E:%.4f,N:%d,CNT:%d,ST:%.4f,ET:%.4f\n",
                    (double)period_result_cache.period_time,
                    (double)period_result_cache.average_current,
                    (double)period_result_cache.peak_current,
                    (double)period_result_cache.energy,
                    period_result_cache.sample_count,
-                   periods_completed);
+                   periods_completed,
+                   (double)period_result_cache.start_time,
+                   (double)period_result_cache.end_time);
             period_result_ready = false;
         }
         k_mutex_unlock(&uart_mutex);
@@ -883,12 +892,9 @@ bool wait_for_periods(int num_periods, float voltage, int timeout_seconds)  {
     
     
     k_mutex_lock(&uart_mutex, K_FOREVER);
-    printf("  已完成 %d 個週期\n", periods_completed);
     periods_waiting = false; //關閉計數器
     periods_completed = 0;   //重置計數器
-    printf("  週期計數器已重置為 0\n");
     period_detect_enabled = false; //關閉週期檢測
-    printf("  週期檢測已關閉\n");
     periods_done = false;
     k_mutex_unlock(&uart_mutex);
     
@@ -1031,17 +1037,12 @@ void system_start(void) {
     }
 
     // 階段二：維持電壓
-    // printk("\n【階段 2】維持 %.1fV 電壓 %d 分鐘\n", (double)TARGET_VOLTAGE_V, HOLD_TIME_MIN);
-    // if (!interruptible_delay_minutes(HOLD_TIME_MIN)) {
-    //     goto system_stop;
-    // }
-
-    /* ====== 維持時間結束後才啟用週期檢測 ====== */
-    // period_detect_enabled = true;
-    // printk("\n週期檢測已啟動\n");
+    printf("\n【階段 2】維持 %.1fV 電壓 %d 分鐘\n", (double)TARGET_VOLTAGE_V, HOLD_TIME_MIN);
+    if (!interruptible_delay_minutes(HOLD_TIME_MIN)) {
+        goto system_stop;
+    }
 
     // 階段三：斜坡下降
-    // printk("\n【階段 3】電壓斜坡下降\n");
     printf("\n【階段 3】電壓斜坡下降(每 %d 個週期下降一次)\n", PERIODS_BEFORE_VOLTAGE_DROP);
     printf("從 %.1fV 下降至 %.1fV\n", (double)TARGET_VOLTAGE_V, (double)FINAL_VOLTAGE_V);
 
@@ -1053,21 +1054,11 @@ void system_start(void) {
         }
 
          /* ====== 先等待指定數量的週期完成 ====== */
-        k_mutex_lock(&uart_mutex, K_FOREVER);
-        printf("\n[DEBUG] ===== while 迴圈開始 =====\n");
-        printf("\n--- 電壓 %.2fV ---\n", (double)current_voltage);
-        period_detect_enabled = true;
-        k_mutex_unlock(&uart_mutex);
         if (!wait_for_periods(PERIODS_BEFORE_VOLTAGE_DROP, current_voltage, 15)) {
             /* 超時或被中斷，詢問是否繼續 */
             if (should_stop()) goto system_stop;
             printk("  週期檢測超時，繼續下降電壓\n");
         }
-
-        k_mutex_lock(&uart_mutex, K_FOREVER);
-        printf("[DEBUG] wait_for_periods 已返回\n");
-        printf("電壓: %.2fV測試已完成\n", (double)current_voltage);
-        k_mutex_unlock(&uart_mutex);
 
         current_voltage -= VOLTAGE_STEP_V;
 
@@ -1088,16 +1079,6 @@ void system_start(void) {
 
         /* ====== 更新全域電壓變數 ====== */
         current_set_voltage = current_voltage;
-
-        k_mutex_lock(&uart_mutex, K_FOREVER);
-        printf("電壓下降為: %.2fV\n", (double)current_voltage);
-        k_mutex_unlock(&uart_mutex);
-
-        if (current_voltage > FINAL_VOLTAGE_V + 0.01f) {
-            if (!interruptible_delay_seconds(STEP_INTERVAL_SEC)) {
-                goto system_stop;
-            }
-        }
     }
     /* 最後一個電壓等級也要等待週期完成 */
     if (current_voltage <= FINAL_VOLTAGE_V + 0.01f && current_voltage >= FINAL_VOLTAGE_V - 0.01f) {

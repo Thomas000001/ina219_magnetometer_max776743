@@ -447,14 +447,14 @@ static const struct gpio_dt_spec led2 = GPIO_DT_SPEC_GET(LED2_NODE, gpios);
 /* ============ MAX77643 軟啟動參數 ============ */
 #define SOFT_START_VOLTAGE_V    0.8f
 #define TARGET_VOLTAGE_V        5.0f
-#define SOFT_START_STEP_V       0.1f
+#define SOFT_START_STEP_V       0.2f
 #define SOFT_START_DELAY_MS     100
 
 /* ============ 斜坡下降參數 ============ */
 #define FINAL_VOLTAGE_V         0.5f
 #define VOLTAGE_STEP_V          0.2f
 #define STEP_INTERVAL_SEC       15
-#define HOLD_TIME_MIN           1
+#define HOLD_TIME_MIN           5
 
 /* ============ INA219 配置參數 ============ */
 #define INA219_SHUNT_RESISTANCE    0.1f

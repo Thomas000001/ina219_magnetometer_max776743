@@ -23,6 +23,7 @@
 #define MIN_PERIOD_MS           70     // 最小有效週期 (ms)
 #define MAX_PERIOD_MS           1000    // 最大有效週期 (ms)
 #define PEAK_DETECTION_WINDOW   5       // 峰值檢測窗口大小
+#define VALLEY_DETECTION_WINDOW 5       // 谷值檢測窗口大小
 #define MIN_SAMPLES_PER_PERIOD  10      // 每週期最少樣本數
 
 /* ============ 檢測方法選擇 ============ */
@@ -49,10 +50,11 @@ typedef struct {
 
 /* ============ 檢測器狀態 ============ */
 typedef enum {
-    STATE_INIT,                 // 初始化狀態
-    STATE_WAITING_FIRST_PEAK,   // 等待第一個峰值
-    STATE_COLLECTING,           // 收集週期數據
-    STATE_PERIOD_COMPLETE       // 週期完成
+    STATE_INIT,
+    STATE_WAITING_FIRST_PEAK,
+    STATE_WAITING_VALLEY,       // 新增：等待谷值
+    STATE_COLLECTING,
+    STATE_PERIOD_COMPLETE
 } detector_state_t;
 
 /* ============ 週期檢測器結構 ============ */
@@ -75,6 +77,9 @@ typedef struct {
     float current_max;          // 當前週期最大值
     float current_max_time;     // 當前最大值時間
     int samples_since_max;      // 距離最大值的樣本數
+    float current_min;          // 當前最小值
+    float current_min_time;     // 當前最小值時間
+    int samples_since_min;      // 距離最小值的樣本數
     
     /* 零交叉檢測相關 */
     float dc_offset;            // 直流偏移量

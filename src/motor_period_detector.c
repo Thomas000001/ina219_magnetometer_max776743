@@ -87,8 +87,24 @@ static void calculate_period_statistics(motor_period_detector_t *detector,
  */
 static void reset_period_buffer(motor_period_detector_t *detector) {
     detector->buffer_idx = 0;
+}
+
+/**
+ * @brief 重置峰值追蹤（用於開始尋找新的峰值）
+ */
+static void reset_peak_tracking(motor_period_detector_t *detector) {
     detector->current_max = -1e10f;
+    detector->current_max_time = 0.0f;
     detector->samples_since_max = 0;
+}
+
+/**
+ * @brief 重置谷值追蹤（用於開始尋找谷值）
+ */
+static void reset_valley_tracking(motor_period_detector_t *detector, float current, float timestamp) {
+    detector->current_min = current;
+    detector->current_min_time = timestamp;
+    detector->samples_since_min = 0;
 }
 
 /**
@@ -118,56 +134,111 @@ static bool process_peak_detection(motor_period_detector_t *detector,
                                     float current, float voltage, float timestamp) {
     bool period_complete = false;
     
-    /* 更新當前最大值 */
-    if (current > detector->current_max) {
-        detector->current_max = current;
-        detector->current_max_time = timestamp;
-        detector->samples_since_max = 0;
-    } else {
-        detector->samples_since_max++;
-    }
-    
     switch (detector->state) {
         case STATE_INIT:
         case STATE_WAITING_FIRST_PEAK:
-            /* 等待第一個峰值 */
+            /* ===== 等待第一個峰值 ===== */
+            
+            /* 更新當前最大值 */
+            if (current > detector->current_max) {
+                detector->current_max = current;
+                detector->current_max_time = timestamp;
+                detector->samples_since_max = 0;
+            } else {
+                detector->samples_since_max++;
+            }
+            
+            /* 檢測是否達到峰值（信號開始下降） */
             if (detector->samples_since_max >= PEAK_DETECTION_WINDOW) {
                 /* 檢測到第一個峰值 */
                 detector->last_peak_value = detector->current_max;
                 detector->last_peak_time = detector->current_max_time;
-                detector->state = STATE_COLLECTING;
                 
                 LOG_DBG("First peak detected: %.2f mA at %.3f s", 
                         (double)detector->last_peak_value, 
                         (double)detector->last_peak_time);
-                        
-                /* 重置緩衝區並開始收集 */
+                
+                /* 進入等待谷值狀態 */
+                detector->state = STATE_WAITING_VALLEY;
+                reset_valley_tracking(detector, current, timestamp);
+                
+                /* 開始收集週期數據 */
                 reset_period_buffer(detector);
                 add_sample_to_buffer(detector, current, voltage, timestamp);
             }
             break;
             
-        case STATE_COLLECTING:
-            /* 收集週期數據 */
+        case STATE_WAITING_VALLEY:
+            /* ===== 等待谷值（信號下降階段） ===== */
+            
+            /* 持續收集數據 */
             add_sample_to_buffer(detector, current, voltage, timestamp);
             
-            /* 檢測下一個峰值 */
+            /* 追蹤最小值 */
+            if (current < detector->current_min) {
+                detector->current_min = current;
+                detector->current_min_time = timestamp;
+                detector->samples_since_min = 0;
+            } else {
+                detector->samples_since_min++;
+            }
+            
+            /* 檢測是否達到谷值（信號開始上升） */
+            if (detector->samples_since_min >= VALLEY_DETECTION_WINDOW) {
+                /* 確認谷值，進入收集狀態尋找下一個峰值 */
+                LOG_DBG("Valley detected: %.2f mA at %.3f s", 
+                        (double)detector->current_min, 
+                        (double)detector->current_min_time);
+                
+                detector->state = STATE_COLLECTING;
+                
+                /* 重置峰值追蹤，準備尋找下一個峰值 */
+                reset_peak_tracking(detector);
+                /* 將當前值作為新的峰值追蹤起點 */
+                detector->current_max = current;
+                detector->current_max_time = timestamp;
+                detector->samples_since_max = 0;
+            }
+            break;
+            
+        case STATE_COLLECTING:
+            /* ===== 收集週期數據，尋找下一個峰值（信號上升階段） ===== */
+            
+            /* 收集數據 */
+            add_sample_to_buffer(detector, current, voltage, timestamp);
+            
+            /* 更新當前最大值 */
+            if (current > detector->current_max) {
+                detector->current_max = current;
+                detector->current_max_time = timestamp;
+                detector->samples_since_max = 0;
+            } else {
+                detector->samples_since_max++;
+            }
+            
+            /* 檢測是否達到新的峰值 */
             if (detector->samples_since_max >= PEAK_DETECTION_WINDOW) {
                 /* 驗證這是一個有效的新峰值 */
                 float time_diff = detector->current_max_time - detector->last_peak_time;
                 float time_diff_ms = time_diff * 1000.0f;
                 
                 if (time_diff_ms >= MIN_PERIOD_MS && time_diff_ms <= MAX_PERIOD_MS) {
-                    /* ====== 在 reset 之前，先保存當前峰值資訊 ====== */
+                    /* 保存當前峰值資訊 */
                     float this_peak_value = detector->current_max;
                     float this_peak_time = detector->current_max_time;
                     
-                    /* 有效週期完成 */
-                    calculate_period_statistics(detector, detector->last_peak_time, this_peak_time, this_peak_value);
+                    /* 計算週期統計 */
+                    calculate_period_statistics(detector, 
+                                                detector->last_peak_time, 
+                                                this_peak_time, 
+                                                this_peak_value);
                     
                     if (detector->last_period.valid) {
                         period_complete = true;
-                        detector->state = STATE_PERIOD_COMPLETE;
+                        
+                        LOG_DBG("Period complete: %.3f s, peak: %.2f mA", 
+                                (double)detector->last_period.period_time,
+                                (double)this_peak_value);
                         
                         /* 調用回調函數 */
                         if (detector->on_period_complete) {
@@ -175,23 +246,40 @@ static bool process_peak_detection(motor_period_detector_t *detector,
                         }
                     }
                     
-                    /* 準備下一個週期 */
+                    /* 更新上一個峰值資訊 */
+                    detector->last_peak_value = this_peak_value;
+                    detector->last_peak_time = this_peak_time;
+                    
+                    /* 重置緩衝區，準備下一個週期 */
+                    reset_period_buffer(detector);
+                    
+                    /* 進入等待谷值狀態 */
+                    detector->state = STATE_WAITING_VALLEY;
+                    reset_valley_tracking(detector, current, timestamp);
+                    
+                    /* 繼續收集數據（當前樣本屬於下一個週期） */
+                    add_sample_to_buffer(detector, current, voltage, timestamp);
+                    
+                } else if (time_diff_ms > MAX_PERIOD_MS) {
+                    /* 週期過長，可能漏檢了峰值，重新開始 */
+                    LOG_WRN("Period too long (%.1f ms), resetting", (double)time_diff_ms);
+                    
                     detector->last_peak_value = detector->current_max;
                     detector->last_peak_time = detector->current_max_time;
                     reset_period_buffer(detector);
-                    detector->state = STATE_COLLECTING;
+                    
+                    detector->state = STATE_WAITING_VALLEY;
+                    reset_valley_tracking(detector, current, timestamp);
+                    add_sample_to_buffer(detector, current, voltage, timestamp);
                 }
-                
-                /* 重置最大值追蹤 */
-                detector->current_max = current;
-                detector->current_max_time = timestamp;
-                detector->samples_since_max = 0;
+                /* 如果 time_diff_ms < MIN_PERIOD_MS，忽略這個假峰值，繼續等待 */
             }
             break;
             
         case STATE_PERIOD_COMPLETE:
-            /* 週期完成後繼續收集下一個週期 */
-            detector->state = STATE_COLLECTING;
+            /* 這個狀態在新的設計中不再使用，直接轉到 STATE_WAITING_VALLEY */
+            detector->state = STATE_WAITING_VALLEY;
+            reset_valley_tracking(detector, current, timestamp);
             add_sample_to_buffer(detector, current, voltage, timestamp);
             break;
     }

@@ -465,7 +465,7 @@ static const struct gpio_dt_spec led2 = GPIO_DT_SPEC_GET(LED2_NODE, gpios);
 /* ====== 週期檢測配置 ====== */
 #define PERIOD_DETECT_METHOD    DETECT_METHOD_PEAK  // 使用峰值檢測法
 #define PERIOD_DETECT_MIN_VOLTAGE   5.0f                // 週期檢測啟動電壓閾值 (V)
-#define PERIODS_BEFORE_VOLTAGE_DROP 4                   // 每個電壓等級需要檢測的週期數
+#define PERIODS_BEFORE_VOLTAGE_DROP 6                   // 每個電壓等級需要檢測的週期數
 
 /* ============ 執行緒配置 ============ */
 #define INA219_STACK_SIZE 2048
@@ -1003,6 +1003,39 @@ bool soft_start_sbb0(float start_voltage, float target_voltage,
     return true;
 }
 
+bool direct_start_sbb0(float voltage) {
+    int ret;
+
+    printk("\n【直接啟動】設置電壓: %.2fV\n", (double)voltage);
+
+    k_mutex_lock(&i2c_mutex, K_FOREVER);
+    
+    /* 先設置目標電壓 */
+    ret = max77643_set_tv_sbb(&max77643_device, 0, voltage);
+    if (ret != MAX77643_NO_ERROR) {
+        k_mutex_unlock(&i2c_mutex);
+        printk("設置電壓失敗: %d\n", ret);
+        return false;
+    }
+    
+    /* 開啟輸出 */
+    ret = max77643_set_en_sbb(&max77643_device, 0, EN_SBB_ON);
+    k_mutex_unlock(&i2c_mutex);
+    
+    if (ret != MAX77643_NO_ERROR) {
+        printk("開啟 SBB0 失敗: %d\n", ret);
+        return false;
+    }
+
+    /* 更新全域電壓變數 */
+    current_set_voltage = voltage;
+    
+    gpio_pin_set_dt(&led1, 1);  /* LED1 亮起表示輸出開啟 */
+    printk("SBB0 已開啟，電壓: %.2fV\n", (double)voltage);
+
+    return true;
+}
+
 /* ============ 系統啟動函數 ============ */
 void system_start(void) {
     int ret;
@@ -1035,6 +1068,12 @@ void system_start(void) {
                          SOFT_START_STEP_V, SOFT_START_DELAY_MS)) {
         goto system_stop;
     }
+
+    // 階段一：直接啟動
+    // printf("\n【階段 1】直接啟動到 %.1fV\n", (double)TARGET_VOLTAGE_V);
+    // if (!direct_start_sbb0(TARGET_VOLTAGE_V)) {
+    //     goto system_stop;
+    // }
 
     // 階段二：維持電壓
     printf("\n【階段 2】維持 %.1fV 電壓 %d 分鐘\n", (double)TARGET_VOLTAGE_V, HOLD_TIME_MIN);

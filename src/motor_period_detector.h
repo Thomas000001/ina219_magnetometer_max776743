@@ -22,7 +22,7 @@
 #define PERIOD_BUFFER_SIZE      500     // 一個週期內最大樣本數
 #define MIN_PERIOD_MS           70     // 最小有效週期 (ms)
 #define MAX_PERIOD_MS           1000    // 最大有效週期 (ms)
-#define PEAK_DETECTION_WINDOW   5       // 峰值檢測窗口大小
+#define PEAK_DETECTION_WINDOW   7       // 峰值檢測窗口大小
 #define VALLEY_DETECTION_WINDOW 5       // 谷值檢測窗口大小
 #define MIN_SAMPLES_PER_PERIOD  10      // 每週期最少樣本數
 

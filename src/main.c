@@ -454,7 +454,7 @@ static const struct gpio_dt_spec led2 = GPIO_DT_SPEC_GET(LED2_NODE, gpios);
 #define FINAL_VOLTAGE_V         0.5f
 #define VOLTAGE_STEP_V          0.2f
 #define STEP_INTERVAL_SEC       15
-#define HOLD_TIME_MIN           5
+#define HOLD_TIME_MIN           1
 
 /* ============ INA219 配置參數 ============ */
 #define INA219_SHUNT_RESISTANCE    0.1f
@@ -466,6 +466,13 @@ static const struct gpio_dt_spec led2 = GPIO_DT_SPEC_GET(LED2_NODE, gpios);
 #define PERIOD_DETECT_METHOD    DETECT_METHOD_PEAK  // 使用峰值檢測法
 #define PERIOD_DETECT_MIN_VOLTAGE   5.0f                // 週期檢測啟動電壓閾值 (V)
 #define PERIODS_BEFORE_VOLTAGE_DROP 6                   // 每個電壓等級需要檢測的週期數
+
+/* ====== 週期統計配置 ====== */
+#define PERIODS_TO_SKIP         1       /* 每個電壓等級要跳過的週期數（第1個） */
+#define PERIODS_TO_AVERAGE      5       /* 用於計算平均的週期數（第2~6個） */
+
+/* ====== 電壓穩定等待時間 ====== */
+#define VOLTAGE_SETTLE_TIME_MS  50     /* 電壓下降後等待穩定的時間 (ms) */
 
 /* ============ 執行緒配置 ============ */
 #define INA219_STACK_SIZE 2048
@@ -501,12 +508,12 @@ static volatile bool ina219_logging_active = false;
 static volatile float current_set_voltage = 0.0f;
 
 
-/* ====== 新增：當前電壓等級的週期計數器（使用 atomic）====== */
+/* ====== 當前電壓等級的週期計數器（使用 atomic）====== */
 static atomic_t current_voltage_period_count = ATOMIC_INIT(0);
 
 static volatile bool period_detect_enabled = false;
 
-/* 新增：週期等待控制變數 */
+/* 週期等待控制變數 */
 static volatile int periods_target = 0;           /* 目標週期數 */
 static volatile int periods_completed = 0;        /* 已完成的週期數 */
 static volatile bool periods_waiting = false;     /* 是否正在等待 */
@@ -516,8 +523,47 @@ static volatile bool periods_done = false;        /* 是否達標 */
 static volatile bool period_result_ready = false;
 static period_data_t period_result_cache;
 
+/* ====== 週期統計累積結構 ====== */
+typedef struct {
+    float period_sum;           /* 週期時間累積 */
+    float avg_current_sum;      /* 平均電流累積 */
+    float peak_current_sum;     /* 峰值電流累積 */
+    float energy_sum;           /* 能量累積 */
+    float voltage_sum;          /* 電壓累積 */
+    int valid_count;            /* 有效週期計數（不含跳過的） */
+    int total_count;            /* 總週期計數（含跳過的） */
+} period_accumulator_t;
+
+static period_accumulator_t period_accum;
+
+/* ====== 平均結果輸出旗標 ====== */
+static volatile bool avg_result_ready = false;
+static volatile float avg_result_period = 0.0f;
+static volatile float avg_result_current = 0.0f;
+static volatile float avg_result_peak = 0.0f;
+static volatile float avg_result_energy = 0.0f;
+static volatile float avg_result_voltage = 0.0f;
+static volatile int avg_result_count = 0;
+
+/* 重置累積器 */
+static void reset_period_accumulator(void) {
+    memset((void*)&period_accum, 0, sizeof(period_accumulator_t));
+}
+
+/* 計算並準備平均結果輸出 */
+static void prepare_averaged_result(void) {
+    if (period_accum.valid_count > 0) {
+        avg_result_period = period_accum.period_sum / period_accum.valid_count;
+        avg_result_current = period_accum.avg_current_sum / period_accum.valid_count;
+        avg_result_peak = period_accum.peak_current_sum / period_accum.valid_count;
+        avg_result_energy = period_accum.energy_sum / period_accum.valid_count;
+        avg_result_voltage = period_accum.voltage_sum / period_accum.valid_count;
+        avg_result_count = period_accum.valid_count;
+        avg_result_ready = true;
+    }
+}
 /* ============ 移動平均濾波器 ============ */
-#define CURRENT_FILTER_SIZE 8
+#define CURRENT_FILTER_SIZE 16
 
 typedef struct {
     float values[CURRENT_FILTER_SIZE];
@@ -555,16 +601,30 @@ static float moving_average_add(MovingAverage *ma, float value, int window_size)
 void on_period_detected(period_data_t *data) {
     if (!data->valid) return;
 
-    /* 緩存結果，由 INA219 執行緒統一輸出 */
     memcpy((void*)&period_result_cache, data, sizeof(period_data_t));
     period_result_ready = true;
 
     k_mutex_lock(&period_mutex, K_FOREVER);
-    /* 只有在等待狀態才累加計數 */
     if (periods_waiting) {
         periods_completed++;
+        
+        /* 累積週期數據（跳過前 PERIODS_TO_SKIP 個） */
+        period_accum.total_count++;
+        
+        if (periods_completed > PERIODS_TO_SKIP) {
+            /* 第2個週期開始才累積用於平均計算 */
+            period_accum.period_sum += data->period_time;
+            period_accum.avg_current_sum += data->average_current;
+            period_accum.peak_current_sum += data->peak_current;
+            period_accum.energy_sum += data->energy;
+            period_accum.voltage_sum += data->voltage;
+            period_accum.valid_count++;
+        }
+        
         if (periods_completed >= periods_target) {
             periods_done = true;
+
+            prepare_averaged_result();
         }
     }
     k_mutex_unlock(&period_mutex);
@@ -725,6 +785,8 @@ void ina219_read_thread_entry(void *arg1, void *arg2, void *arg3) {
             printk("  - ADC 模式: 12BIT_4S\n");
             printk("  - 取樣間隔: %d ms\n", SENSOR_SAMPLE_INTERVAL_MS);
             printk("  - 檢測方法: 峰值檢測法\n");
+            printk("  - 每電壓等級: 檢測%d個週期，跳過第1個，對後%d個取平均\n",
+                    PERIODS_BEFORE_VOLTAGE_DROP, PERIODS_TO_AVERAGE);
         }
 
         // 讀取電流值
@@ -758,24 +820,33 @@ void ina219_read_thread_entry(void *arg1, void *arg2, void *arg3) {
 
         // 如果有新的週期檢測結果，輸出
         if (period_result_ready) {
-            // printf("P:%.4f,AVG:%.2f,PEAK:%.2f,E:%.4f,N:%d,CNT:%d\n",
-            //        (double)period_result_cache.period_time,
-            //        (double)period_result_cache.average_current,
-            //        (double)period_result_cache.peak_current,
-            //        (double)period_result_cache.energy,
-            //        period_result_cache.sample_count,
-            //        periods_completed);
-            printf("P:%.4f,AVG:%.2f,PEAK:%.2f,E:%.4f,N:%d,CNT:%d,ST:%.4f,ET:%.4f\n",
-                   (double)period_result_cache.period_time,
-                   (double)period_result_cache.average_current,
-                   (double)period_result_cache.peak_current,
-                   (double)period_result_cache.energy,
-                   period_result_cache.sample_count,
-                   periods_completed,
-                   (double)period_result_cache.start_time,
-                   (double)period_result_cache.end_time);
+            
+            bool is_skipped = (periods_completed <= PERIODS_TO_SKIP);
+            printf("P:%.4f,AVG:%.2f,PEAK:%.2f,E:%.4f,N:%d,CNT:%d,ST:%.4f,ET:%.4f%s\n",
+                    (double)period_result_cache.period_time,
+                    (double)period_result_cache.average_current,
+                    (double)period_result_cache.peak_current,
+                    (double)period_result_cache.energy,
+                    period_result_cache.sample_count,
+                    periods_completed,
+                    (double)period_result_cache.start_time,
+                    (double)period_result_cache.end_time,
+                    is_skipped ? ",SKIP" : "");
             period_result_ready = false;
         }
+
+        // ====== 如果平均結果準備好了，輸出 PAVG 行 ======
+        if (avg_result_ready) {
+            printf("PAVG:%.4f,AVG:%.2f,PEAK:%.2f,E:%.4f,V:%.2f,N:%d\n",
+                   (double)avg_result_period,
+                   (double)avg_result_current,
+                   (double)avg_result_peak,
+                   (double)avg_result_energy,
+                   (double)avg_result_voltage,
+                   avg_result_count);
+            avg_result_ready = false;
+        }
+
         k_mutex_unlock(&uart_mutex);
 
         k_sleep(K_MSEC(SENSOR_SAMPLE_INTERVAL_MS));
@@ -847,11 +918,18 @@ bool wait_for_periods(int num_periods, float voltage, int timeout_seconds)  {
     k_mutex_unlock(&uart_mutex);
 
     k_mutex_lock(&period_mutex, K_FOREVER);
+
     printf("確認每次下降電壓後是否有重置計數器...\n");
+
+    reset_period_accumulator();
+
     /* 設定目標並啟動等待（這些變數會在 on_period_detected 中被檢查）*/
     periods_target = num_periods;
     periods_completed = 0;
     periods_done = false;
+
+    avg_result_ready = false;  /* 重置平均結果旗標 */
+    
     /* 確保週期檢測已啟用 */
     period_detect_enabled = true;
     printf("\n週期檢測已啟動\n");
@@ -885,18 +963,19 @@ bool wait_for_periods(int num_periods, float voltage, int timeout_seconds)  {
         
         if (elapsed_100ms % 50 == 0) {
             k_mutex_lock(&uart_mutex, K_FOREVER);
-            printf("  已完成 %d/%d 週期\n", periods_completed, num_periods);
+            printf("  已完成 %d/%d 週期 (有效: %d)\n", 
+                    periods_completed, num_periods, period_accum.valid_count);
             k_mutex_unlock(&uart_mutex);
         }
     }
-    
-    
     k_mutex_lock(&uart_mutex, K_FOREVER);
     periods_waiting = false; //關閉計數器
     periods_completed = 0;   //重置計數器
     period_detect_enabled = false; //關閉週期檢測
     periods_done = false;
     k_mutex_unlock(&uart_mutex);
+
+    
     
     return true;
 }
@@ -1051,6 +1130,10 @@ void system_start(void) {
     printk("========================================\n");
     printk("按 Button 2 停止\n");
     printk("----------------------------------------\n");
+    printk("週期檢測配置:\n");
+    printk("  - 每電壓等級檢測: %d 個週期\n", PERIODS_BEFORE_VOLTAGE_DROP);
+    printk("  - 跳過前: %d 個週期\n", PERIODS_TO_SKIP);
+    printk("  - 用於平均: %d 個週期\n", PERIODS_TO_AVERAGE);
 
     // 啟動 INA219 電流記錄
     ina219_logging_active = true;
@@ -1063,17 +1146,17 @@ void system_start(void) {
     }
 
     // 階段一：軟啟動
-    printf("\n【階段 1】軟啟動到 %.1fV\n", (double)TARGET_VOLTAGE_V);
-    if (!soft_start_sbb0(SOFT_START_VOLTAGE_V, TARGET_VOLTAGE_V,
-                         SOFT_START_STEP_V, SOFT_START_DELAY_MS)) {
-        goto system_stop;
-    }
-
-    // 階段一：直接啟動
-    // printf("\n【階段 1】直接啟動到 %.1fV\n", (double)TARGET_VOLTAGE_V);
-    // if (!direct_start_sbb0(TARGET_VOLTAGE_V)) {
+    // printf("\n【階段 1】軟啟動到 %.1fV\n", (double)TARGET_VOLTAGE_V);
+    // if (!soft_start_sbb0(SOFT_START_VOLTAGE_V, TARGET_VOLTAGE_V,
+    //                      SOFT_START_STEP_V, SOFT_START_DELAY_MS)) {
     //     goto system_stop;
     // }
+
+    // 階段一：直接啟動
+    printf("\n【階段 1】直接啟動到 %.1fV\n", (double)TARGET_VOLTAGE_V);
+    if (!direct_start_sbb0(TARGET_VOLTAGE_V)) {
+        goto system_stop;
+    }
 
     // 階段二：維持電壓
     printf("\n【階段 2】維持 %.1fV 電壓 %d 分鐘\n", (double)TARGET_VOLTAGE_V, HOLD_TIME_MIN);
@@ -1118,6 +1201,18 @@ void system_start(void) {
 
         /* ====== 更新全域電壓變數 ====== */
         current_set_voltage = current_voltage;
+
+        printk("\n--- 電壓已下降至 %.2fV ---\n", (double)current_voltage);
+        
+        /* ====== 等待電壓穩定 ====== */
+        printk("  等待電壓穩定 (%d ms)...\n", VOLTAGE_SETTLE_TIME_MS);
+        if (!interruptible_delay_ms(VOLTAGE_SETTLE_TIME_MS)) {
+            goto system_stop;
+        }
+        
+        /* ====== 重置週期檢測器狀態，確保從新的峰值開始 ====== */
+        period_detector_reset(&period_detector);
+        printk("  週期檢測器已重置，開始新電壓等級的檢測\n");
     }
     /* 最後一個電壓等級也要等待週期完成 */
     if (current_voltage <= FINAL_VOLTAGE_V + 0.01f && current_voltage >= FINAL_VOLTAGE_V - 0.01f) {

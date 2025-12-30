@@ -472,7 +472,10 @@ static const struct gpio_dt_spec led2 = GPIO_DT_SPEC_GET(LED2_NODE, gpios);
 #define PERIODS_TO_AVERAGE      5       /* 用於計算平均的週期數（第2~6個） */
 
 /* ====== 電壓穩定等待時間 ====== */
-#define VOLTAGE_SETTLE_TIME_MS  50     /* 電壓下降後等待穩定的時間 (ms) */
+#define VOLTAGE_SETTLE_MIN_MS   100     /* 電壓穩定最小等待時間 (ms) */
+#define VOLTAGE_SETTLE_MAX_MS   800    /* 電壓穩定最大等待時間 (ms) */
+#define VOLTAGE_SETTLE_PERIODS  1.0f    /* 等待幾個週期的時間 */
+
 
 /* ============ 執行緒配置 ============ */
 #define INA219_STACK_SIZE 2048
@@ -530,6 +533,12 @@ typedef struct {
     float peak_current_sum;     /* 峰值電流累積 */
     float energy_sum;           /* 能量累積 */
     float voltage_sum;          /* 電壓累積 */
+
+    float ac_current_sum;       // 新增20251230：AC 電流累積
+    float dc_current_sum;       // 新增20251230：DC 電流累積
+    int ac_valid_count;         // 新增20251230：有效 AC 計數
+    int dc_valid_count;         // 新增20251230：有效 DC 計數
+
     int valid_count;            /* 有效週期計數（不含跳過的） */
     int total_count;            /* 總週期計數（含跳過的） */
 } period_accumulator_t;
@@ -543,7 +552,15 @@ static volatile float avg_result_current = 0.0f;
 static volatile float avg_result_peak = 0.0f;
 static volatile float avg_result_energy = 0.0f;
 static volatile float avg_result_voltage = 0.0f;
+static volatile float avg_result_ac = 0.0f;      // 新增20251230：平均 AC 電流
+static volatile float avg_result_dc = 0.0f;      // 新增20251230：平均 DC 電流
 static volatile int avg_result_count = 0;
+static volatile int avg_result_ac_count = 0;     // 新增20251230：有效 AC 數量
+static volatile int avg_result_dc_count = 0;     // 新增20251230：有效 DC 數量
+
+/* ====== 上一個電壓等級的平均週期（用於計算穩定等待時間）====== */
+static volatile float last_avg_period_ms = 100.0f;  /* 預設 500ms */
+
 
 /* 重置累積器 */
 static void reset_period_accumulator(void) {
@@ -559,7 +576,30 @@ static void prepare_averaged_result(void) {
         avg_result_energy = period_accum.energy_sum / period_accum.valid_count;
         avg_result_voltage = period_accum.voltage_sum / period_accum.valid_count;
         avg_result_count = period_accum.valid_count;
+
+        /* 新增20251230：計算平均 AC */
+        if (period_accum.ac_valid_count > 0) {
+            avg_result_ac = period_accum.ac_current_sum / period_accum.ac_valid_count;
+            avg_result_ac_count = period_accum.ac_valid_count;
+        } else {
+            avg_result_ac = 0.0f;
+            avg_result_ac_count = 0;
+        }
+
+        /* 新增20251230：計算平均 DC */
+        if (period_accum.dc_valid_count > 0) {
+            avg_result_dc = period_accum.dc_current_sum / period_accum.dc_valid_count;
+            avg_result_dc_count = period_accum.dc_valid_count;
+        } else {
+            avg_result_dc = 0.0f;
+            avg_result_dc_count = 0;
+        }
+        
+
         avg_result_ready = true;
+        
+        /* 儲存平均週期（轉換為 ms），供下次電壓穩定等待使用 */
+        last_avg_period_ms = avg_result_period * 1000.0f;
     }
 }
 /* ============ 移動平均濾波器 ============ */
@@ -619,6 +659,19 @@ void on_period_detected(period_data_t *data) {
             period_accum.energy_sum += data->energy;
             period_accum.voltage_sum += data->voltage;
             period_accum.valid_count++;
+
+            /* 累積 AC 值（如果有效） */
+            if (data->ac_valid) {
+                period_accum.ac_current_sum += data->ac_current;
+                period_accum.ac_valid_count++;
+            }
+            
+            /* 累積 DC 值（如果有效） */
+            if (data->dc_valid) {
+                period_accum.dc_current_sum += data->dc_current;
+                period_accum.dc_valid_count++;
+            }
+
         }
         
         if (periods_completed >= periods_target) {
@@ -822,7 +875,7 @@ void ina219_read_thread_entry(void *arg1, void *arg2, void *arg3) {
         if (period_result_ready) {
             
             bool is_skipped = (periods_completed <= PERIODS_TO_SKIP);
-            printf("P:%.4f,AVG:%.2f,PEAK:%.2f,E:%.4f,N:%d,CNT:%d,ST:%.4f,ET:%.4f%s\n",
+            printf("P:%.4f,AVG:%.2f,PEAK:%.2f,E:%.4f,N:%d,CNT:%d,ST:%.4f,ET:%.4f,AC:%.2f,DC:%.2f%s\n",
                     (double)period_result_cache.period_time,
                     (double)period_result_cache.average_current,
                     (double)period_result_cache.peak_current,
@@ -831,19 +884,25 @@ void ina219_read_thread_entry(void *arg1, void *arg2, void *arg3) {
                     periods_completed,
                     (double)period_result_cache.start_time,
                     (double)period_result_cache.end_time,
+                    (double)(period_result_cache.ac_valid ? period_result_cache.ac_current : 0.0f),
+                    (double)(period_result_cache.dc_valid ? period_result_cache.dc_current : 0.0f),
                     is_skipped ? ",SKIP" : "");
+
+            
             period_result_ready = false;
         }
 
         // ====== 如果平均結果準備好了，輸出 PAVG 行 ======
         if (avg_result_ready) {
-            printf("PAVG:%.4f,AVG:%.2f,PEAK:%.2f,E:%.4f,V:%.2f,N:%d\n",
+            printf("PAVG:%.4f,AVG:%.2f,PEAK:%.2f,E:%.4f,V:%.2f,N:%d,AC:%.2f,DC:%.2f\n",
                    (double)avg_result_period,
                    (double)avg_result_current,
                    (double)avg_result_peak,
                    (double)avg_result_energy,
                    (double)avg_result_voltage,
-                   avg_result_count);
+                   avg_result_count,
+                   (double)avg_result_ac,
+                   (double)avg_result_dc);
             avg_result_ready = false;
         }
 
@@ -1198,17 +1257,31 @@ void system_start(void) {
             printk("設置電壓失敗: %d\n", ret);
             goto system_stop;
         }
+        
+        printk("\n--- 電壓已下降至 %.2fV ---\n", (double)current_voltage);
+        
+        /* ====== 計算自適應穩定等待時間 ====== */
+        int settle_time_ms = (int)(last_avg_period_ms * VOLTAGE_SETTLE_PERIODS);
+
+        /* 限制在合理範圍內 */
+        if (settle_time_ms < VOLTAGE_SETTLE_MIN_MS) {
+            settle_time_ms = VOLTAGE_SETTLE_MIN_MS;
+        } else if (settle_time_ms > VOLTAGE_SETTLE_MAX_MS) {
+            settle_time_ms = VOLTAGE_SETTLE_MAX_MS;
+        }
+
+        /* ====== 等待電壓穩定 ====== */
+        printk("  等待電壓穩定 (%d ms, 基於平均週期 %.1f ms)...\n", 
+            settle_time_ms, (double)last_avg_period_ms);
+        
+        printk("  等待電壓穩定 (%d ms)...\n", settle_time_ms);
+        if (!interruptible_delay_ms(settle_time_ms)) {
+            goto system_stop;
+        }
 
         /* ====== 更新全域電壓變數 ====== */
         current_set_voltage = current_voltage;
 
-        printk("\n--- 電壓已下降至 %.2fV ---\n", (double)current_voltage);
-        
-        /* ====== 等待電壓穩定 ====== */
-        printk("  等待電壓穩定 (%d ms)...\n", VOLTAGE_SETTLE_TIME_MS);
-        if (!interruptible_delay_ms(VOLTAGE_SETTLE_TIME_MS)) {
-            goto system_stop;
-        }
         
         /* ====== 重置週期檢測器狀態，確保從新的峰值開始 ====== */
         period_detector_reset(&period_detector);

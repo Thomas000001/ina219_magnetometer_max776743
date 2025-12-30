@@ -21,6 +21,78 @@ LOG_MODULE_REGISTER(period_detector, LOG_LEVEL_ERR);
 /* ============ 內部輔助函數 ============ */
 
 /**
+ * @brief 計算峰值附近的平均電流 (AC)
+ * @param detector 檢測器指針
+ * @param peak_idx 峰值在緩衝區中的索引
+ * @param ac_value 輸出的 AC 值
+ * @return 是否成功計算
+ * 20251230新增
+ */
+static bool calculate_ac_current(motor_period_detector_t *detector, 
+                                  int peak_idx, 
+                                  float *ac_value) {
+    int window = AC_DC_WINDOW_SIZE;
+    int start_idx = peak_idx - window;
+    int end_idx = peak_idx + window;
+    
+    /* 檢查邊界 */
+    if (start_idx < 0 || end_idx >= detector->buffer_idx) {
+        return false;
+    }
+    
+    /* 計算平均值 */
+    float sum = 0.0f;
+    int count = 0;
+    for (int i = start_idx; i <= end_idx; i++) {
+        sum += detector->current_buffer[i];
+        count++;
+    }
+    
+    if (count > 0) {
+        *ac_value = sum / count;
+        return true;
+    }
+    
+    return false;
+}
+
+/**
+ * @brief 計算谷值附近的平均電流 (DC)
+ * @param detector 檢測器指針
+ * @param valley_idx 谷值在緩衝區中的索引
+ * @param dc_value 輸出的 DC 值
+ * @return 是否成功計算
+ * 20251230新增
+ */
+static bool calculate_dc_current(motor_period_detector_t *detector, 
+                                  int valley_idx, 
+                                  float *dc_value) {
+    int window = AC_DC_WINDOW_SIZE;
+    int start_idx = valley_idx - window;
+    int end_idx = valley_idx + window;
+    
+    /* 檢查邊界 */
+    if (start_idx < 0 || end_idx >= detector->buffer_idx) {
+        return false;
+    }
+    
+    /* 計算平均值 */
+    float sum = 0.0f;
+    int count = 0;
+    for (int i = start_idx; i <= end_idx; i++) {
+        sum += detector->current_buffer[i];
+        count++;
+    }
+    
+    if (count > 0) {
+        *dc_value = sum / count;
+        return true;
+    }
+    
+    return false;
+}
+
+/**
  * @brief 計算週期統計數據
  */
 static void calculate_period_statistics(motor_period_detector_t *detector, 
@@ -66,6 +138,21 @@ static void calculate_period_statistics(motor_period_detector_t *detector,
     
     /* 計算能量 (mJ) = 平均電流(mA) × 電壓(V) × 時間(s) */
     pd->energy = pd->average_current * pd->voltage * pd->period_time;
+
+    /* 新增：計算 AC（峰值附近平均電流） */
+    pd->ac_valid = calculate_ac_current(detector, detector->peak_buffer_idx, &pd->ac_current);
+    
+    /* 新增：計算 DC（谷值附近平均電流） */
+    pd->dc_valid = calculate_dc_current(detector, detector->valley_buffer_idx, &pd->dc_current);
+    
+    if (pd->ac_valid) {
+        LOG_DBG("AC (peak area avg): %.2f mA at idx %d", 
+                (double)pd->ac_current, detector->peak_buffer_idx);
+    }
+    if (pd->dc_valid) {
+        LOG_DBG("DC (valley area avg): %.2f mA at idx %d", 
+                (double)pd->dc_current, detector->valley_buffer_idx);
+    }
     
     /* 驗證週期是否在有效範圍內 */
     float period_ms = pd->period_time * 1000.0f;
@@ -96,6 +183,7 @@ static void reset_peak_tracking(motor_period_detector_t *detector) {
     detector->current_max = -1e10f;
     detector->current_max_time = 0.0f;
     detector->samples_since_max = 0;
+    detector->peak_buffer_idx = -1;
 }
 
 /**
@@ -105,6 +193,7 @@ static void reset_valley_tracking(motor_period_detector_t *detector, float curre
     detector->current_min = current;
     detector->current_min_time = timestamp;
     detector->samples_since_min = 0;
+    detector->valley_buffer_idx = -1;
 }
 
 /**
@@ -179,6 +268,8 @@ static bool process_peak_detection(motor_period_detector_t *detector,
                 detector->current_min = current;
                 detector->current_min_time = timestamp;
                 detector->samples_since_min = 0;
+                /* 新增20251230：記錄谷值在緩衝區中的索引 */
+                detector->valley_buffer_idx = detector->buffer_idx - 1;
             } else {
                 detector->samples_since_min++;
             }
@@ -212,6 +303,8 @@ static bool process_peak_detection(motor_period_detector_t *detector,
                 detector->current_max = current;
                 detector->current_max_time = timestamp;
                 detector->samples_since_max = 0;
+                /* 新增20251230：記錄峰值在緩衝區中的索引 */
+                detector->peak_buffer_idx = detector->buffer_idx - 1;
             } else {
                 detector->samples_since_max++;
             }
@@ -463,6 +556,9 @@ void period_detector_init(motor_period_detector_t *detector, detect_method_t met
     detector->threshold_high = 52.0f;  // 預設上閾值
     detector->threshold_low = 50.0f;   // 預設下閾值
     detector->last_period.valid = false;
+
+    detector->peak_buffer_idx = -1;   // 新增
+    detector->valley_buffer_idx = -1; // 新增
     
     const char *method_name;
     switch (method) {

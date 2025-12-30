@@ -26,6 +26,10 @@
 #define VALLEY_DETECTION_WINDOW 5       // 谷值檢測窗口大小
 #define MIN_SAMPLES_PER_PERIOD  10      // 每週期最少樣本數
 
+/* AC/DC 計算參數 */
+#define AC_DC_WINDOW_SIZE       2       // 峰值/谷值前後各取幾個樣本（總共 2*N+1 個）
+
+
 /* ============ 檢測方法選擇 ============ */
 typedef enum {
     DETECT_METHOD_PEAK,         // 峰值檢測法
@@ -46,6 +50,12 @@ typedef struct {
     float end_time;             // 週期結束時間
     float voltage;              // 平均電壓 (V)
     bool valid;                 // 數據是否有效
+
+    /* 新增20251230：峰值和谷值附近的平均電流 */
+    float ac_current;           // 峰值附近平均電流 (mA) - 峰值前後各2個+峰值
+    float dc_current;           // 谷值附近平均電流 (mA) - 谷值前後各2個+谷值
+    bool ac_valid;              // AC 值是否有效
+    bool dc_valid;              // DC 值是否有效
 } period_data_t;
 
 /* ============ 檢測器狀態 ============ */
@@ -77,9 +87,13 @@ typedef struct {
     float current_max;          // 當前週期最大值
     float current_max_time;     // 當前最大值時間
     int samples_since_max;      // 距離最大值的樣本數
+    int peak_buffer_idx;        // 20251230：峰值在緩衝區中的索引
+
+    /* 谷值檢測相關 */
     float current_min;          // 當前最小值
     float current_min_time;     // 當前最小值時間
     int samples_since_min;      // 距離最小值的樣本數
+    int valley_buffer_idx;      // 20251230：谷值在緩衝區中的索引
     
     /* 零交叉檢測相關 */
     float dc_offset;            // 直流偏移量

@@ -277,6 +277,12 @@ static bool process_peak_detection(motor_period_detector_t *detector,
             /* 檢測是否達到谷值（信號開始上升） */
             if (detector->samples_since_min >= VALLEY_DETECTION_WINDOW) {
                 /* 確認谷值，進入收集狀態尋找下一個峰值 */
+
+                /* ★ 確認谷值，保存用於後續 prominence 計算 ★ */
+                detector->confirmed_valley_value = detector->current_min;
+                detector->confirmed_valley_time = detector->current_min_time;
+                detector->valley_confirmed = true;
+
                 LOG_DBG("Valley detected: %.2f mA at %.3f s", 
                         (double)detector->current_min, 
                         (double)detector->current_min_time);
@@ -312,6 +318,35 @@ static bool process_peak_detection(motor_period_detector_t *detector,
             /* 檢測是否達到新的峰值 */
             if (detector->samples_since_max >= PEAK_DETECTION_WINDOW) {
                 /* 驗證這是一個有效的新峰值 */
+
+                /* 新增20260101：Peak Prominence 檢查*/
+                float prominence = detector->current_max - detector->confirmed_valley_value;
+                
+                if (prominence < MIN_PROMINENCE_MA) {
+                    /*  這是假峰值！谷值區域的微小突起  */
+                    detector->false_peak_count++;
+                    
+                    LOG_INF("假峰值被過濾 #%d: peak=%.2f mA, valley=%.2f mA, "
+                            "prominence=%.2f mA < %.2f mA (閾值)",
+                            detector->false_peak_count,
+                            (double)detector->current_max, 
+                            (double)detector->confirmed_valley_value, 
+                            (double)prominence, 
+                            (double)MIN_PROMINENCE_MA);
+                    
+                    /* 重置峰值追蹤，繼續尋找真正的峰值 */
+                    detector->current_max = current;
+                    detector->current_max_time = timestamp;
+                    detector->samples_since_max = 0;
+                    
+                    /* 保持在 STATE_COLLECTING 狀態，繼續尋找 */
+                    break;
+                }
+                
+                /*  prominence 足夠大，這是真正的峰值  */
+                LOG_DBG("Valid peak: %.2f mA, prominence=%.2f mA", 
+                        (double)detector->current_max, (double)prominence);
+
                 float time_diff = detector->current_max_time - detector->last_peak_time;
                 float time_diff_ms = time_diff * 1000.0f;
                 

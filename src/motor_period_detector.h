@@ -26,6 +26,10 @@
 #define VALLEY_DETECTION_WINDOW 5       // 谷值檢測窗口大小
 #define MIN_SAMPLES_PER_PERIOD  10      // 每週期最少樣本數
 
+/* Peak Prominence 參數 */
+#define MIN_PROMINENCE_MA       3.0f    // 最小峰值突出度 (mA)20260101
+
+
 /* AC/DC 計算參數 */
 #define AC_DC_WINDOW_SIZE       2       // 峰值/谷值前後各取幾個樣本（總共 2*N+1 個）
 
@@ -94,6 +98,11 @@ typedef struct {
     float current_min_time;     // 當前最小值時間
     int samples_since_min;      // 距離最小值的樣本數
     int valley_buffer_idx;      // 20251230：谷值在緩衝區中的索引
+
+    /* 20260101新增：已確認的谷值（用於 prominence 計算）*/
+    float confirmed_valley_value;   // 已確認的谷值電流
+    float confirmed_valley_time;    // 已確認的谷值時間
+    bool valley_confirmed;          // 谷值是否已確認
     
     /* 零交叉檢測相關 */
     float dc_offset;            // 直流偏移量
@@ -110,6 +119,9 @@ typedef struct {
     float period_sum;           // 週期累加（用於計算平均）
     int period_count;           // 有效週期計數
     float average_period;       // 平均週期
+
+    /* 假峰值統計（新增20260101）*/
+    int false_peak_count;       // 被過濾的假峰值計數
     
     /* 最近一次完整週期的數據 */
     period_data_t last_period;

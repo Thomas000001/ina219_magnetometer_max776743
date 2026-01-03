@@ -773,7 +773,7 @@ static int init_ina219(void) {
         return ret;
     }
 
-    ret = ina219_set_adc_mode(&my_ina219, INA219_ADC_12BIT_16S, INA219_ADC_12BIT_16S);
+    ret = ina219_set_adc_mode(&my_ina219, INA219_ADC_12BIT_32S, INA219_ADC_12BIT_32S);
     if (ret != 0) {
         LOG_ERR("Failed to set INA219 ADC mode: %d", ret);
         return ret;
@@ -875,7 +875,7 @@ void ina219_read_thread_entry(void *arg1, void *arg2, void *arg3) {
         if (period_result_ready) {
             
             bool is_skipped = (periods_completed <= PERIODS_TO_SKIP);
-            printf("P:%.4f,AVG:%.2f,PEAK:%.2f,E:%.4f,N:%d,CNT:%d,ST:%.4f,ET:%.4f,AC:%.2f,DC:%.2f,ACV:%d,DCV:%d%s\n",
+            printf("P:%.4f,AVG:%.2f,PEAK:%.2f,E:%.4f,N:%d,CNT:%d,ST:%.4f,ET:%.4f,AC:%.2f,DC:%.2f,ACV:%d,DCV:%d,PT:%.4f,VT:%.4f%s\n",
                     (double)period_result_cache.period_time,
                     (double)period_result_cache.average_current,
                     (double)period_result_cache.peak_current,
@@ -888,6 +888,8 @@ void ina219_read_thread_entry(void *arg1, void *arg2, void *arg3) {
                     (double)(period_result_cache.dc_valid ? period_result_cache.dc_current : 0.0f),
                     (int)period_result_cache.ac_valid,
                     (int)period_result_cache.dc_valid,
+                    (double)period_result_cache.peak_time,      
+                    (double)period_result_cache.valley_time,    
                     is_skipped ? ",SKIP" : "");
 
             

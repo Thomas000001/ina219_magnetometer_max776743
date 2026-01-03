@@ -21,7 +21,7 @@
 /* ============ 配置參數 ============ */
 #define PERIOD_BUFFER_SIZE      500     // 一個週期內最大樣本數
 #define MIN_PERIOD_MS           70     // 最小有效週期 (ms)
-#define MAX_PERIOD_MS           1000    // 最大有效週期 (ms)
+#define MAX_PERIOD_MS           4500    // 最大有效週期 (ms)
 #define PEAK_DETECTION_WINDOW   7       // 峰值檢測窗口大小
 #define VALLEY_DETECTION_WINDOW 5       // 谷值檢測窗口大小
 #define MIN_SAMPLES_PER_PERIOD  10      // 每週期最少樣本數
@@ -52,6 +52,10 @@ typedef struct {
     int sample_count;           // 樣本數量
     float start_time;           // 週期開始時間
     float end_time;             // 週期結束時間
+    // 新增：20260103
+    float peak_time;            // 峰值時間點
+    float valley_time;          // 谷值時間點
+    
     float voltage;              // 平均電壓 (V)
     bool valid;                 // 數據是否有效
 

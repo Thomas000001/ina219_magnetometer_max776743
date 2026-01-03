@@ -129,6 +129,11 @@ static void calculate_period_statistics(motor_period_detector_t *detector,
     // pd->start_time = detector->last_peak_time; //使用上一個峰值時間作為開始，當前峰值時間作為結束
     pd->start_time = start_time;
     pd->end_time = end_time;
+
+    // 新增20260103：峰值時間谷值時間
+    pd->peak_time = detector->current_max_time;           
+    pd->valley_time = detector->confirmed_valley_time;    
+
     pd->period_time = end_time - start_time;
     pd->average_current = sum / n;
     pd->peak_current = peak_current;
@@ -264,7 +269,7 @@ static bool process_peak_detection(motor_period_detector_t *detector,
             add_sample_to_buffer(detector, current, voltage, timestamp);
             
             /* 追蹤最小值 */
-            if (current < detector->current_min) {
+            if (current <= detector->current_min) {
                 detector->current_min = current;
                 detector->current_min_time = timestamp;
                 detector->samples_since_min = 0;

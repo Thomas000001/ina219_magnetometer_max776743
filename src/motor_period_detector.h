@@ -27,7 +27,7 @@
 #define MIN_SAMPLES_PER_PERIOD  10      // 每週期最少樣本數
 
 /* Peak Prominence 參數 */
-#define MIN_PROMINENCE_MA       3.0f    // 最小峰值突出度 (mA)20260101
+#define MIN_PROMINENCE_MA       3.0f    // 最小峰值突出度 (mA)|新增：20260101
 
 
 /* AC/DC 計算參數 */

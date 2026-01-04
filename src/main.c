@@ -453,7 +453,7 @@ static const struct gpio_dt_spec led2 = GPIO_DT_SPEC_GET(LED2_NODE, gpios);
 /* ============ 斜坡下降參數 ============ */
 #define FINAL_VOLTAGE_V         0.5f
 #define VOLTAGE_STEP_V          0.2f
-#define STEP_INTERVAL_SEC       15
+#define STEP_INTERVAL_SEC       25
 #define HOLD_TIME_MIN           1
 
 /* ============ INA219 配置參數 ============ */

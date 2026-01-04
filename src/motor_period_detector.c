@@ -288,7 +288,7 @@ static bool process_peak_detection(motor_period_detector_t *detector,
             if (detector->samples_since_min >= VALLEY_DETECTION_WINDOW) {
                 
                 /* ★ 20260104新增：Valley Prominence 檢查 ★ */
-                float valley_prominence = detector->last_peak_value - detector->current_min;
+                float valley_prominence = detector->confirmed_peak_value - detector->current_min;
                 if (valley_prominence < MIN_PROMINENCE_MA) {
                     /* 這是假谷值！峰值區域的微小下降 */
                     detector->false_valley_count++;  // 需要在結構體中新增此計數器
@@ -334,8 +334,9 @@ static bool process_peak_detection(motor_period_detector_t *detector,
                 detector->current_max = current;
                 detector->current_max_time = timestamp;
                 detector->samples_since_max = 0;
+
+                break;
             }
-            break;
             
         case STATE_COLLECTING:
             /* ===== 收集週期數據，尋找下一個峰值（信號上升階段） ===== */

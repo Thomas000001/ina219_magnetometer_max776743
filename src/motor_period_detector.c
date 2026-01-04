@@ -248,6 +248,11 @@ static bool process_peak_detection(motor_period_detector_t *detector,
                 detector->last_peak_value = detector->current_max;
                 detector->last_peak_time = detector->current_max_time;
                 
+                /* ★ 新增20260104：同時設定 confirmed_peak，供第一次谷值驗證使用 ★ */
+                detector->confirmed_peak_value = detector->current_max;
+                detector->confirmed_peak_time = detector->current_max_time;
+                detector->peak_confirmed = true;
+
                 LOG_DBG("First peak detected: %.2f mA at %.3f s", 
                         (double)detector->last_peak_value, 
                         (double)detector->last_peak_time);
@@ -285,29 +290,29 @@ static bool process_peak_detection(motor_period_detector_t *detector,
                 /* ★ 20260104新增：Valley Prominence 檢查 ★ */
                 float valley_prominence = detector->last_peak_value - detector->current_min;
                 if (valley_prominence < MIN_PROMINENCE_MA) {
-                /* 這是假谷值！峰值區域的微小下降 */
-                detector->false_valley_count++;  // 需要在結構體中新增此計數器
-                
-                LOG_INF("假谷值被過濾 #%d: valley=%.2f mA, peak=%.2f mA, "
-                        "prominence=%.2f mA < %.2f mA (閾值)",
-                        detector->false_valley_count,
-                        (double)detector->current_min,
-                        (double)detector->last_peak_value,
-                        (double)valley_prominence,
-                        (double)MIN_PROMINENCE_MA);
-                
-                /* 重置谷值追蹤，繼續尋找真正的谷值 */
-                detector->current_min = current;
-                detector->current_min_time = timestamp;
-                detector->samples_since_min = 0;
-                
-                /* 保持在 STATE_WAITING_VALLEY 狀態 */
-                break;
-            }
+                    /* 這是假谷值！峰值區域的微小下降 */
+                    detector->false_valley_count++;  // 需要在結構體中新增此計數器
+                    
+                    LOG_INF("假谷值被過濾 #%d: valley=%.2f mA, peak=%.2f mA, "
+                            "prominence=%.2f mA < %.2f mA (閾值)",
+                            detector->false_valley_count,
+                            (double)detector->current_min,
+                            (double)detector->last_peak_value,
+                            (double)valley_prominence,
+                            (double)MIN_PROMINENCE_MA);
+                    
+                    /* 重置谷值追蹤，繼續尋找真正的谷值 */
+                    detector->current_min = current;
+                    detector->current_min_time = timestamp;
+                    detector->samples_since_min = 0;
+                    
+                    /* 保持在 STATE_WAITING_VALLEY 狀態 */
+                    break;
+                }
 
-             /* ★ prominence 足夠大，這是真正的谷值 ★ */
-            LOG_DBG("Valid valley: %.2f mA, prominence=%.2f mA",
-                    (double)detector->current_min, (double)valley_prominence);
+                /* ★ prominence 足夠大，這是真正的谷值 ★ */
+                LOG_DBG("Valid valley: %.2f mA, prominence=%.2f mA",
+                        (double)detector->current_min, (double)valley_prominence);
                 
                 /* 確認谷值，進入收集狀態尋找下一個峰值 */
 

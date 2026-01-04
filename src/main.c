@@ -773,7 +773,7 @@ static int init_ina219(void) {
         return ret;
     }
 
-    ret = ina219_set_adc_mode(&my_ina219, INA219_ADC_12BIT_32S, INA219_ADC_12BIT_32S);
+    ret = ina219_set_adc_mode(&my_ina219, INA219_ADC_12BIT_8S, INA219_ADC_12BIT_8S);
     if (ret != 0) {
         LOG_ERR("Failed to set INA219 ADC mode: %d", ret);
         return ret;

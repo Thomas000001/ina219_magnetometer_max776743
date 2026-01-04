@@ -281,7 +281,36 @@ static bool process_peak_detection(motor_period_detector_t *detector,
             
             /* 檢測是否達到谷值（信號開始上升） */
             if (detector->samples_since_min >= VALLEY_DETECTION_WINDOW) {
+                
+                /* ★ 20260104新增：Valley Prominence 檢查 ★ */
+                float valley_prominence = detector->last_peak_value - detector->current_min;
+                if (valley_prominence < MIN_PROMINENCE_MA) {
+                /* 這是假谷值！峰值區域的微小下降 */
+                detector->false_valley_count++;  // 需要在結構體中新增此計數器
+                
+                LOG_INF("假谷值被過濾 #%d: valley=%.2f mA, peak=%.2f mA, "
+                        "prominence=%.2f mA < %.2f mA (閾值)",
+                        detector->false_valley_count,
+                        (double)detector->current_min,
+                        (double)detector->last_peak_value,
+                        (double)valley_prominence,
+                        (double)MIN_PROMINENCE_MA);
+                
+                /* 重置谷值追蹤，繼續尋找真正的谷值 */
+                detector->current_min = current;
+                detector->current_min_time = timestamp;
+                detector->samples_since_min = 0;
+                
+                /* 保持在 STATE_WAITING_VALLEY 狀態 */
+                break;
+            }
+
+             /* ★ prominence 足夠大，這是真正的谷值 ★ */
+            LOG_DBG("Valid valley: %.2f mA, prominence=%.2f mA",
+                    (double)detector->current_min, (double)valley_prominence);
+                
                 /* 確認谷值，進入收集狀態尋找下一個峰值 */
+
 
                 /* ★ 確認谷值，保存用於後續 prominence 計算 ★ */
                 detector->confirmed_valley_value = detector->current_min;
@@ -351,6 +380,11 @@ static bool process_peak_detection(motor_period_detector_t *detector,
                 /*  prominence 足夠大，這是真正的峰值  */
                 LOG_DBG("Valid peak: %.2f mA, prominence=%.2f mA", 
                         (double)detector->current_max, (double)prominence);
+                
+                /* 保存已確認的峰值，供下次谷值驗證使用 */
+                detector->confirmed_peak_value = detector->current_max;
+                detector->confirmed_peak_time = detector->current_max_time;
+                detector->peak_confirmed = true;
 
                 float time_diff = detector->current_max_time - detector->last_peak_time;
                 float time_diff_ms = time_diff * 1000.0f;
@@ -596,6 +630,10 @@ void period_detector_init(motor_period_detector_t *detector, detect_method_t met
     detector->threshold_high = 52.0f;  // 預設上閾值
     detector->threshold_low = 50.0f;   // 預設下閾值
     detector->last_period.valid = false;
+    detector->confirmed_peak_value = 0.0f;
+    detector->confirmed_peak_time = 0.0f;
+    detector->peak_confirmed = false;
+    detector->false_valley_count = 0;
 
     detector->peak_buffer_idx = -1;   // 新增
     detector->valley_buffer_idx = -1; // 新增

@@ -107,6 +107,11 @@ typedef struct {
     float confirmed_valley_value;   // 已確認的谷值電流
     float confirmed_valley_time;    // 已確認的谷值時間
     bool valley_confirmed;          // 谷值是否已確認
+
+    /*20260104新增：已確認的峰值（用於 prominence 計算）*/
+    float confirmed_peak_value;     // 已確認的峰值電流
+    float confirmed_peak_time;      // 已確認的峰值時間
+    bool peak_confirmed;            // 峰值是否已確認
     
     /* 零交叉檢測相關 */
     float dc_offset;            // 直流偏移量
@@ -126,6 +131,8 @@ typedef struct {
 
     /* 假峰值統計（新增20260101）*/
     int false_peak_count;       // 被過濾的假峰值計數
+    /* 假谷值統計（新增20260104）*/
+    int false_valley_count;     // 被過濾的假谷值計數
     
     /* 最近一次完整週期的數據 */
     period_data_t last_period;

@@ -453,8 +453,8 @@ static const struct gpio_dt_spec led2 = GPIO_DT_SPEC_GET(LED2_NODE, gpios);
 /* ============ 斜坡下降參數 ============ */
 #define FINAL_VOLTAGE_V         0.5f
 #define VOLTAGE_STEP_V          0.2f
-#define STEP_INTERVAL_SEC       25
-#define HOLD_TIME_MIN           1
+#define STEP_INTERVAL_SEC       15
+#define HOLD_TIME_MIN           5
 
 /* ============ INA219 配置參數 ============ */
 #define INA219_SHUNT_RESISTANCE    0.1f
@@ -465,11 +465,11 @@ static const struct gpio_dt_spec led2 = GPIO_DT_SPEC_GET(LED2_NODE, gpios);
 /* ====== 週期檢測配置 ====== */
 #define PERIOD_DETECT_METHOD    DETECT_METHOD_PEAK  // 使用峰值檢測法
 #define PERIOD_DETECT_MIN_VOLTAGE   5.0f                // 週期檢測啟動電壓閾值 (V)
-#define PERIODS_BEFORE_VOLTAGE_DROP 7                   // 每個電壓等級需要檢測的週期數
+#define PERIODS_BEFORE_VOLTAGE_DROP 3                   // 每個電壓等級需要檢測的週期數
 
 /* ====== 週期統計配置 ====== */
-#define PERIODS_TO_SKIP         1       /* 每個電壓等級要跳過的週期數（第1個） */
-#define PERIODS_TO_AVERAGE      7       /* 用於計算平均的週期數（第2~6個） */
+#define PERIODS_TO_SKIP         2       /* 每個電壓等級要跳過的週期數（第1個） */
+#define PERIODS_TO_AVERAGE      3       /* 用於計算平均的週期數（第2~6個） */
 
 /* ====== 電壓穩定等待時間 ====== */
 #define VOLTAGE_SETTLE_MIN_MS   100     /* 電壓穩定最小等待時間 (ms) */

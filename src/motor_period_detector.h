@@ -75,6 +75,14 @@ typedef struct {
 
 } period_data_t;
 
+/* ↓↓↓ 新增20260110：待輸出週期暫存結構 ↓↓↓ */
+typedef struct {
+    period_data_t data;             // 週期數據（AC 欄位待填充）
+    float peak_value;               // 峰值電流（用於計算 AC 閾值）
+    int peak_buffer_idx;            // 峰值在緩衝區中的索引
+    bool pending;                   // 是否有待處理的週期
+} pending_period_t;
+
 /* ============ 檢測器狀態 ============ */
 typedef enum {
     STATE_INIT,
@@ -145,6 +153,9 @@ typedef struct {
     
     /* 最近一次完整週期的數據 */
     period_data_t last_period;
+
+    /* 新增20260110：待輸出的週期（等待 AC 計算完成）*/
+    pending_period_t pending_period;
     
     /* 回調函數（週期完成時調用）*/
     void (*on_period_complete)(period_data_t *data);

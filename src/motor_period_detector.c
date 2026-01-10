@@ -28,33 +28,33 @@ LOG_MODULE_REGISTER(period_detector, LOG_LEVEL_ERR);
  * @return 是否成功計算
  * 20251230新增
  */
-static bool calculate_ac_current(motor_period_detector_t *detector, 
-                                  int peak_idx, 
-                                  float *ac_value) {
-    int window = AC_DC_WINDOW_SIZE;
-    int start_idx = peak_idx - window;
-    int end_idx = peak_idx + window;
+// static bool calculate_ac_current(motor_period_detector_t *detector, 
+//                                   int peak_idx, 
+//                                   float *ac_value) {
+//     int window = AC_DC_WINDOW_SIZE;
+//     int start_idx = peak_idx - window;
+//     int end_idx = peak_idx + window;
     
-    /* 檢查邊界 */
-    if (start_idx < 0 || end_idx >= detector->buffer_idx) {
-        return false;
-    }
+//     /* 檢查邊界 */
+//     if (start_idx < 0 || end_idx >= detector->buffer_idx) {
+//         return false;
+//     }
     
-    /* 計算平均值 */
-    float sum = 0.0f;
-    int count = 0;
-    for (int i = start_idx; i <= end_idx; i++) {
-        sum += detector->current_buffer[i];
-        count++;
-    }
+//     /* 計算平均值 */
+//     float sum = 0.0f;
+//     int count = 0;
+//     for (int i = start_idx; i <= end_idx; i++) {
+//         sum += detector->current_buffer[i];
+//         count++;
+//     }
     
-    if (count > 0) {
-        *ac_value = sum / count;
-        return true;
-    }
+//     if (count > 0) {
+//         *ac_value = sum / count;
+//         return true;
+//     }
     
-    return false;
-}
+//     return false;
+// }
 
 /**
  * @brief 使用百分比閾值法計算 AC 電流和 AC 時間
@@ -221,15 +221,10 @@ static void calculate_period_statistics(motor_period_detector_t *detector,
     
     /* 填充週期數據 */
     pd->sample_count = n;
-    // pd->start_time = detector->time_buffer[0];
-    // pd->start_time = detector->last_peak_time; //使用上一個峰值時間作為開始，當前峰值時間作為結束
     pd->start_time = start_time;
     pd->end_time = end_time;
-
-    // 新增20260103：峰值時間谷值時間
     pd->peak_time = detector->current_max_time;           
     pd->valley_time = detector->confirmed_valley_time;    
-
     pd->period_time = end_time - start_time;
     pd->average_current = sum / n;
     pd->peak_current = peak_current;
@@ -240,27 +235,17 @@ static void calculate_period_statistics(motor_period_detector_t *detector,
     /* 計算能量 (mJ) = 平均電流(mA) × 電壓(V) × 時間(s) */
     pd->energy = pd->average_current * pd->voltage * pd->period_time;
 
-    /* 新增20251227：計算 AC（峰值附近平均電流） */
-    // pd->ac_valid = calculate_ac_current(detector, detector->peak_buffer_idx, &pd->ac_current);
+    pd->ac_valid = false;
+    pd->ac_current = 0.0f;
+    pd->ac_time = 0.0f;
+    pd->ac_start_time = 0.0f;
+    pd->ac_end_time = 0.0f;
+    pd->ac_sample_count = 0;
+    pd->ac_threshold = 0.0f;
 
-    /* 新增20260108：使用百分比閾值法計算 AC */
-    pd->ac_valid = calculate_ac_with_threshold(
-        detector,
-        detector->peak_buffer_idx,
-        peak_current,                       // 峰值電流
-        detector->confirmed_valley_value,   // 谷值電流
-        pd
-    );
-    
-    /* 新增：計算 DC（谷值附近平均電流） */
+    /* DC 計算保持不變 */
     pd->dc_valid = calculate_dc_current(detector, detector->valley_buffer_idx, &pd->dc_current);
     
-    if (pd->ac_valid) {
-        LOG_DBG("AC (threshold method): %.2f mA, time=%.4f s, samples=%d", 
-                (double)pd->ac_current, 
-                (double)pd->ac_time,        // 輸出 AC 時間
-                pd->ac_sample_count);
-    }
     if (pd->dc_valid) {
         LOG_DBG("DC (valley area avg): %.2f mA at idx %d", 
                 (double)pd->dc_current, detector->valley_buffer_idx);
@@ -279,6 +264,112 @@ static void calculate_period_statistics(motor_period_detector_t *detector,
     } else {
         pd->valid = false;
     }
+}
+
+/**
+ * @brief 計算待處理週期的 AC 時間
+ * 
+ * 在谷值確認後調用，此時緩衝區包含完整的「峰值→谷值」下降數據
+ * 
+ * @param detector 檢測器指針
+ * @return true 如果 AC 計算成功
+ */
+static bool calculate_pending_ac(motor_period_detector_t *detector) {
+    if (!detector->pending_period.pending) {
+        return false;
+    }
+    
+    pending_period_t *pp = &detector->pending_period;
+    period_data_t *pd = &pp->data;
+    
+    int n = detector->buffer_idx;
+    int peak_idx = pp->peak_buffer_idx;
+    float peak_value = pp->peak_value;
+    float valley_value = detector->confirmed_valley_value;
+    
+    /* 檢查基本條件 */
+    if (peak_idx < 0 || peak_idx >= n || n < MIN_SAMPLES_PER_PERIOD) {
+        LOG_WRN("AC calc failed: invalid indices (peak_idx=%d, n=%d)", peak_idx, n);
+        pd->ac_valid = false;
+        return false;
+    }
+    
+    /* 計算閾值：谷值 + (峰值 - 谷值) × 百分比 */
+    float amplitude = peak_value - valley_value;
+    if (amplitude <= 0.0f) {
+        LOG_WRN("AC calc failed: invalid amplitude (peak=%.2f, valley=%.2f)", 
+                (double)peak_value, (double)valley_value);
+        pd->ac_valid = false;
+        return false;
+    }
+    
+    float threshold = valley_value + amplitude * AC_THRESHOLD_PERCENT;
+    pd->ac_threshold = threshold;
+    
+    /* 從峰值向左搜索，找到第一個低於閾值的點 */
+    int left_idx = peak_idx;
+    for (int i = peak_idx - 1; i >= 0; i--) {
+        if (detector->current_buffer[i] < threshold) {
+            left_idx = i + 1;  /* 第一個高於閾值的點 */
+            break;
+        }
+        if (i == 0) {
+            left_idx = 0;  /* 整個左側都高於閾值 */
+        }
+    }
+    
+    /* 從峰值向右搜索，找到第一個低於閾值的點 */
+    /* 【關鍵修改】：現在緩衝區包含完整的下降數據，可以正確找到 */
+    int right_idx = peak_idx;
+    for (int i = peak_idx + 1; i < n; i++) {
+        if (detector->current_buffer[i] < threshold) {
+            right_idx = i - 1;  /* 最後一個高於閾值的點 */
+            break;
+        }
+        if (i == n - 1) {
+            right_idx = n - 1;  /* 整個右側都高於閾值（不應該發生）*/
+            LOG_WRN("AC calc: right search reached buffer end");
+        }
+    }
+    
+    /* 確保索引有效 */
+    if (left_idx > right_idx || left_idx < 0 || right_idx >= n) {
+        LOG_WRN("AC calc failed: invalid range [%d, %d]", left_idx, right_idx);
+        pd->ac_valid = false;
+        return false;
+    }
+    
+    /* 計算 AC 時間 */
+    pd->ac_start_time = detector->time_buffer[left_idx];
+    pd->ac_end_time = detector->time_buffer[right_idx];
+    pd->ac_time = pd->ac_end_time - pd->ac_start_time;
+    
+    /* 計算 AC 區域內的平均電流 */
+    float sum = 0.0f;
+    int count = 0;
+    for (int i = left_idx; i <= right_idx; i++) {
+        sum += detector->current_buffer[i];
+        count++;
+    }
+    
+    if (count > 0) {
+        pd->ac_current = sum / count;
+        pd->ac_sample_count = count;
+        pd->ac_valid = true;
+        
+        LOG_DBG("AC calculated (delayed): threshold=%.2f mA, time=%.4f s, "
+                "avg=%.2f mA, samples=%d, idx=[%d,%d]",
+                (double)threshold,
+                (double)pd->ac_time,
+                (double)pd->ac_current,
+                count,
+                left_idx, right_idx);
+        
+        return true;
+    }
+    
+    pd->ac_valid = false;
+    return false;
 }
 
 /**
@@ -433,6 +524,34 @@ static bool process_peak_detection(motor_period_detector_t *detector,
                         (double)detector->current_min, 
                         (double)detector->current_min_time);
                 
+                 /* ↓↓↓ 新增20260110：谷值確認後，計算待處理週期的 AC 並觸發回調 ↓↓↓ */
+                if (detector->pending_period.pending) {
+                    /* 更新待處理週期的谷值時間 */
+                    detector->pending_period.data.valley_time = detector->confirmed_valley_time;
+                    
+                    /* 計算 AC 時間 */
+                    calculate_pending_ac(detector);
+                    
+                    /* 複製回 last_period 以保持一致性 */
+                    memcpy(&detector->last_period, 
+                           &detector->pending_period.data, 
+                           sizeof(period_data_t));
+                    
+                    /* 觸發回調 */
+                    if (detector->on_period_complete) {
+                        detector->on_period_complete(&detector->pending_period.data);
+                    }
+                    
+                    period_complete = true;
+                    
+                    /* 清除待處理標記 */
+                    detector->pending_period.pending = false;
+                    
+                    LOG_DBG("Period complete with AC: time=%.4f s, AC_time=%.4f s", 
+                            (double)detector->pending_period.data.period_time,
+                            (double)detector->pending_period.data.ac_time);
+                }
+
                 detector->state = STATE_COLLECTING;
                 
                 /* 重置峰值追蹤，準備尋找下一個峰值 */
@@ -514,24 +633,22 @@ static bool process_peak_detection(motor_period_detector_t *detector,
                                                 this_peak_value);
                     
                     if (detector->last_period.valid) {
-                        period_complete = true;
+                         /* 暫存週期數據，等待谷值確認後計算 AC */
+                        memcpy(&detector->pending_period.data, 
+                               &detector->last_period, 
+                               sizeof(period_data_t));
+                        detector->pending_period.peak_value = this_peak_value;
+                        detector->pending_period.peak_buffer_idx = detector->peak_buffer_idx;
+                        detector->pending_period.pending = true;
                         
-                        LOG_DBG("Period complete: %.3f s, peak: %.2f mA", 
-                                (double)detector->last_period.period_time,
-                                (double)this_peak_value);
-                        
-                        /* 調用回調函數 */
-                        if (detector->on_period_complete) {
-                            detector->on_period_complete(&detector->last_period);
-                        }
+                        LOG_DBG("Period pending AC calculation: %.3f s", 
+                                (double)detector->last_period.period_time);
                     }
                     
                     /* 更新上一個峰值資訊 */
                     detector->last_peak_value = this_peak_value;
                     detector->last_peak_time = this_peak_time;
                     
-                    /* 重置緩衝區，準備下一個週期 */
-                    reset_period_buffer(detector);
                     
                     /* 進入等待谷值狀態 */
                     detector->state = STATE_WAITING_VALLEY;
@@ -750,6 +867,9 @@ void period_detector_init(motor_period_detector_t *detector, detect_method_t met
 
     detector->peak_buffer_idx = -1;   // 新增
     detector->valley_buffer_idx = -1; // 新增
+    detector->pending_period.pending = false;
+    detector->pending_period.peak_value = 0.0f;
+    detector->pending_period.peak_buffer_idx = -1;
     
     const char *method_name;
     switch (method) {
@@ -826,6 +946,8 @@ void period_detector_reset(motor_period_detector_t *detector) {
     detector->on_period_complete = callback;
     detector->threshold_high = th_high;
     detector->threshold_low = th_low;
+
+    detector->pending_period.pending = false;
     
     LOG_INF("Period detector reset");
 }

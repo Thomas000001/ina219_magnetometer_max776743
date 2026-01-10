@@ -453,7 +453,7 @@ static const struct gpio_dt_spec led2 = GPIO_DT_SPEC_GET(LED2_NODE, gpios);
 /* ============ 斜坡下降參數 ============ */
 #define FINAL_VOLTAGE_V         0.5f
 #define VOLTAGE_STEP_V          0.2f
-#define STEP_INTERVAL_SEC       15
+#define STEP_INTERVAL_SEC       25
 #define HOLD_TIME_MIN           5
 
 /* ============ INA219 配置參數 ============ */
@@ -465,11 +465,11 @@ static const struct gpio_dt_spec led2 = GPIO_DT_SPEC_GET(LED2_NODE, gpios);
 /* ====== 週期檢測配置 ====== */
 #define PERIOD_DETECT_METHOD    DETECT_METHOD_PEAK  // 使用峰值檢測法
 #define PERIOD_DETECT_MIN_VOLTAGE   5.0f                // 週期檢測啟動電壓閾值 (V)
-#define PERIODS_BEFORE_VOLTAGE_DROP 3                   // 每個電壓等級需要檢測的週期數
+#define PERIODS_BEFORE_VOLTAGE_DROP 5                   // 每個電壓等級需要檢測的週期數
 
 /* ====== 週期統計配置 ====== */
 #define PERIODS_TO_SKIP         2       /* 每個電壓等級要跳過的週期數（第1個） */
-#define PERIODS_TO_AVERAGE      3       /* 用於計算平均的週期數（第2~6個） */
+#define PERIODS_TO_AVERAGE      5       /* 用於計算平均的週期數（第2~6個） */
 
 /* ====== 電壓穩定等待時間 ====== */
 #define VOLTAGE_SETTLE_MIN_MS   100     /* 電壓穩定最小等待時間 (ms) */
@@ -536,6 +536,7 @@ typedef struct {
 
     float ac_current_sum;       // 新增20251230：AC 電流累積
     float dc_current_sum;       // 新增20251230：DC 電流累積
+    float ac_time_sum;          // 新增20260108：AC 時間累積
     int ac_valid_count;         // 新增20251230：有效 AC 計數
     int dc_valid_count;         // 新增20251230：有效 DC 計數
 
@@ -557,6 +558,7 @@ static volatile float avg_result_dc = 0.0f;      // 新增20251230：平均 DC �
 static volatile int avg_result_count = 0;
 static volatile int avg_result_ac_count = 0;     // 新增20251230：有效 AC 數量
 static volatile int avg_result_dc_count = 0;     // 新增20251230：有效 DC 數量
+static volatile float avg_result_ac_time = 0.0f;    // 新增20260108：平均 AC 時間
 
 /* ====== 上一個電壓等級的平均週期（用於計算穩定等待時間）====== */
 static volatile float last_avg_period_ms = 100.0f;  /* 預設 500ms */
@@ -580,9 +582,11 @@ static void prepare_averaged_result(void) {
         /* 新增20251230：計算平均 AC */
         if (period_accum.ac_valid_count > 0) {
             avg_result_ac = period_accum.ac_current_sum / period_accum.ac_valid_count;
+            avg_result_ac_time = period_accum.ac_time_sum / period_accum.ac_valid_count;
             avg_result_ac_count = period_accum.ac_valid_count;
         } else {
             avg_result_ac = 0.0f;
+            avg_result_ac_time = 0.0f;
             avg_result_ac_count = 0;
         }
 
@@ -663,6 +667,7 @@ void on_period_detected(period_data_t *data) {
             /* 累積 AC 值（如果有效） */
             if (data->ac_valid) {
                 period_accum.ac_current_sum += data->ac_current;
+                period_accum.ac_time_sum += data->ac_time;  // ← 新增20260108：累積 AC 時間
                 period_accum.ac_valid_count++;
             }
             
@@ -875,7 +880,7 @@ void ina219_read_thread_entry(void *arg1, void *arg2, void *arg3) {
         if (period_result_ready) {
             
             bool is_skipped = (periods_completed <= PERIODS_TO_SKIP);
-            printf("P:%.4f,AVG:%.2f,PEAK:%.2f,E:%.4f,N:%d,CNT:%d,ST:%.4f,ET:%.4f,AC:%.2f,DC:%.2f,ACV:%d,DCV:%d,PT:%.4f,VT:%.4f%s\n",
+            printf("P:%.4f,AVG:%.2f,PEAK:%.2f,E:%.4f,N:%d,CNT:%d,ST:%.4f,ET:%.4f,AC:%.2f,ACT:%.4f,ACST:%.4f,ACET:%.4f,ACN:%d,DC:%.2f,ACV:%d,DCV:%d,PT:%.4f,VT:%.4f%s\n",
                     (double)period_result_cache.period_time,
                     (double)period_result_cache.average_current,
                     (double)period_result_cache.peak_current,
@@ -885,6 +890,10 @@ void ina219_read_thread_entry(void *arg1, void *arg2, void *arg3) {
                     (double)period_result_cache.start_time,
                     (double)period_result_cache.end_time,
                     (double)(period_result_cache.ac_valid ? period_result_cache.ac_current : 0.0f),
+                    (double)(period_result_cache.ac_valid ? period_result_cache.ac_time : 0.0f),        
+                    (double)(period_result_cache.ac_valid ? period_result_cache.ac_start_time : 0.0f), 
+                    (double)(period_result_cache.ac_valid ? period_result_cache.ac_end_time : 0.0f),   
+                    period_result_cache.ac_valid ? period_result_cache.ac_sample_count : 0,            
                     (double)(period_result_cache.dc_valid ? period_result_cache.dc_current : 0.0f),
                     (int)period_result_cache.ac_valid,
                     (int)period_result_cache.dc_valid,
@@ -898,7 +907,7 @@ void ina219_read_thread_entry(void *arg1, void *arg2, void *arg3) {
 
         // ====== 如果平均結果準備好了，輸出 PAVG 行 ======
         if (avg_result_ready) {
-            printf("PAVG:%.4f,AVG:%.2f,PEAK:%.2f,E:%.4f,V:%.2f,N:%d,AC:%.2f,DC:%.2f\n",
+            printf("PAVG:%.4f,AVG:%.2f,PEAK:%.2f,E:%.4f,V:%.2f,N:%d,AC:%.2f,ACT:%.4f,DC:%.2f\n",
                    (double)avg_result_period,
                    (double)avg_result_current,
                    (double)avg_result_peak,
@@ -906,6 +915,7 @@ void ina219_read_thread_entry(void *arg1, void *arg2, void *arg3) {
                    (double)avg_result_voltage,
                    avg_result_count,
                    (double)avg_result_ac,
+                   (double)avg_result_ac_time,
                    (double)avg_result_dc);
             avg_result_ready = false;
         }

@@ -57,6 +57,102 @@ static bool calculate_ac_current(motor_period_detector_t *detector,
 }
 
 /**
+ * @brief 使用百分比閾值法計算 AC 電流和 AC 時間
+ * 
+ * 方法：
+ * 1. 計算閾值 = 谷值 + (峰值 - 谷值) × 百分比
+ * 2. 從峰值向左找第一個低於閾值的點 → t_start
+ * 3. 從峰值向右找第一個低於閾值的點 → t_end
+ * 4. AC_time = t_end - t_start
+ * 5. AC_current = 閾值範圍內所有樣本的平均值
+ */
+static bool calculate_ac_with_threshold(motor_period_detector_t *detector,
+                                         int peak_idx,
+                                         float peak_value,
+                                         float valley_value,
+                                         period_data_t *pd) {
+    int n = detector->buffer_idx;
+    
+    /* 檢查基本條件 */
+    if (peak_idx < 0 || peak_idx >= n || n < MIN_SAMPLES_PER_PERIOD) {
+        pd->ac_valid = false;
+        return false;
+    }
+    
+    /* 計算閾值：谷值 + (峰值 - 谷值) × 百分比 */
+    float amplitude = peak_value - valley_value;
+    if (amplitude <= 0.0f) {
+        pd->ac_valid = false;
+        return false;
+    }
+    
+    float threshold = valley_value + amplitude * AC_THRESHOLD_PERCENT;
+    pd->ac_threshold = threshold;
+    
+    /* 從峰值向左搜索，找到第一個低於閾值的點 */
+    int left_idx = peak_idx;
+    for (int i = peak_idx - 1; i >= 0; i--) {
+        if (detector->current_buffer[i] < threshold) {
+            left_idx = i + 1;  /* 第一個高於閾值的點 */
+            break;
+        }
+        if (i == 0) {
+            left_idx = 0;  /* 整個左側都高於閾值 */
+        }
+    }
+    
+    /* 從峰值向右搜索，找到第一個低於閾值的點 */
+    int right_idx = peak_idx;
+    for (int i = peak_idx + 1; i < n; i++) {
+        if (detector->current_buffer[i] < threshold) {
+            right_idx = i - 1;  /* 最後一個高於閾值的點 */
+            break;
+        }
+        if (i == n - 1) {
+            right_idx = n - 1;  /* 整個右側都高於閾值 */
+        }
+    }
+    
+    /* 確保索引有效 */
+    if (left_idx > right_idx || left_idx < 0 || right_idx >= n) {
+        pd->ac_valid = false;
+        return false;
+    }
+    
+    /* 計算 AC 時間 */
+    pd->ac_start_time = detector->time_buffer[left_idx];
+    pd->ac_end_time = detector->time_buffer[right_idx];
+    pd->ac_time = pd->ac_end_time - pd->ac_start_time;
+    
+    /* 計算 AC 區域內的平均電流 */
+    float sum = 0.0f;
+    int count = 0;
+    for (int i = left_idx; i <= right_idx; i++) {
+        sum += detector->current_buffer[i];
+        count++;
+    }
+    
+    if (count > 0) {
+        pd->ac_current = sum / count;
+        pd->ac_sample_count = count;
+        pd->ac_valid = true;
+        
+        LOG_DBG("AC calculated: threshold=%.2f mA, time=%.4f s, "
+                "avg=%.2f mA, samples=%d, idx=[%d,%d]",
+                (double)threshold,
+                (double)pd->ac_time,
+                (double)pd->ac_current,
+                count,
+                left_idx, right_idx);
+        
+        return true;
+    }
+    
+    pd->ac_valid = false;
+    return false;
+}
+
+/**
  * @brief 計算谷值附近的平均電流 (DC)
  * @param detector 檢測器指針
  * @param valley_idx 谷值在緩衝區中的索引
@@ -144,15 +240,26 @@ static void calculate_period_statistics(motor_period_detector_t *detector,
     /* 計算能量 (mJ) = 平均電流(mA) × 電壓(V) × 時間(s) */
     pd->energy = pd->average_current * pd->voltage * pd->period_time;
 
-    /* 新增：計算 AC（峰值附近平均電流） */
-    pd->ac_valid = calculate_ac_current(detector, detector->peak_buffer_idx, &pd->ac_current);
+    /* 新增20251227：計算 AC（峰值附近平均電流） */
+    // pd->ac_valid = calculate_ac_current(detector, detector->peak_buffer_idx, &pd->ac_current);
+
+    /* 新增20260108：使用百分比閾值法計算 AC */
+    pd->ac_valid = calculate_ac_with_threshold(
+        detector,
+        detector->peak_buffer_idx,
+        peak_current,                       // 峰值電流
+        detector->confirmed_valley_value,   // 谷值電流
+        pd
+    );
     
     /* 新增：計算 DC（谷值附近平均電流） */
     pd->dc_valid = calculate_dc_current(detector, detector->valley_buffer_idx, &pd->dc_current);
     
     if (pd->ac_valid) {
-        LOG_DBG("AC (peak area avg): %.2f mA at idx %d", 
-                (double)pd->ac_current, detector->peak_buffer_idx);
+        LOG_DBG("AC (threshold method): %.2f mA, time=%.4f s, samples=%d", 
+                (double)pd->ac_current, 
+                (double)pd->ac_time,        // 輸出 AC 時間
+                pd->ac_sample_count);
     }
     if (pd->dc_valid) {
         LOG_DBG("DC (valley area avg): %.2f mA at idx %d", 

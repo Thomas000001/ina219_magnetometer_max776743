@@ -21,17 +21,18 @@
 /* ============ 配置參數 ============ */
 #define PERIOD_BUFFER_SIZE      1000     // 一個週期內最大樣本數
 #define MIN_PERIOD_MS           70     // 最小有效週期 (ms)
-#define MAX_PERIOD_MS           1000    // 最大有效週期 (ms)
+#define MAX_PERIOD_MS           3000    // 最大有效週期 (ms)
 #define PEAK_DETECTION_WINDOW   7       // 峰值檢測窗口大小
 #define VALLEY_DETECTION_WINDOW 7       // 谷值檢測窗口大小
 #define MIN_SAMPLES_PER_PERIOD  10      // 每週期最少樣本數
 
 /* Peak Prominence 參數 */
-#define MIN_PROMINENCE_MA       0.5f    // 最小峰值突出度 (mA)|新增：20260101
+#define MIN_PROMINENCE_MA       3.0f    // 最小峰值突出度 (mA)|新增：20260101
 
 
 /* AC/DC 計算參數 */
 #define AC_DC_WINDOW_SIZE       2       // 峰值/谷值前後各取幾個樣本（總共 2*N+1 個）
+#define AC_THRESHOLD_PERCENT    0.90f   // ← 新增：AC 百分比閾值（90% = 谷值 + 90% × (峰值-谷值)）
 
 
 /* ============ 檢測方法選擇 ============ */
@@ -64,6 +65,14 @@ typedef struct {
     float dc_current;           // 谷值附近平均電流 (mA) - 谷值前後各2個+谷值
     bool ac_valid;              // AC 值是否有效
     bool dc_valid;              // DC 值是否有效
+    /* 新增20260108：百分比閾值法相關參數 */
+    float ac_time;              // ← AC 時間 (秒) - 電流高於閾值的持續時間
+    float ac_start_time;        // ← AC 區域開始時間 (秒)
+    float ac_end_time;          // ← AC 區域結束時間 (秒)
+    int ac_sample_count;        // ← AC 區域的樣本數量
+    float ac_threshold;         // ← 使用的閾值 (mA)
+
+
 } period_data_t;
 
 /* ============ 檢測器狀態 ============ */

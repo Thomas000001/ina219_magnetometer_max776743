@@ -1249,7 +1249,7 @@ void system_start(void) {
         }
 
          /* ====== 先等待指定數量的週期完成 ====== */
-        if (!wait_for_periods(PERIODS_BEFORE_VOLTAGE_DROP, current_voltage, 15)) {
+        if (!wait_for_periods(PERIODS_BEFORE_VOLTAGE_DROP, current_voltage, STEP_INTERVAL_SEC)) {
             /* 超時或被中斷，詢問是否繼續 */
             if (should_stop()) goto system_stop;
             printk("  週期檢測超時，繼續下降電壓\n");

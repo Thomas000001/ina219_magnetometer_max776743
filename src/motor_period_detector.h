@@ -21,7 +21,7 @@
 /* ============ 配置參數 ============ */
 #define PERIOD_BUFFER_SIZE      1000     // 一個週期內最大樣本數
 #define MIN_PERIOD_MS           70     // 最小有效週期 (ms)
-#define MAX_PERIOD_MS           3000    // 最大有效週期 (ms)
+#define MAX_PERIOD_MS           6000    // 最大有效週期 (ms)
 #define PEAK_DETECTION_WINDOW   7       // 峰值檢測窗口大小
 #define VALLEY_DETECTION_WINDOW 7       // 谷值檢測窗口大小
 #define MIN_SAMPLES_PER_PERIOD  10      // 每週期最少樣本數
@@ -32,7 +32,7 @@
 
 /* AC/DC 計算參數 */
 #define AC_DC_WINDOW_SIZE       2       // 峰值/谷值前後各取幾個樣本（總共 2*N+1 個）
-#define AC_THRESHOLD_PERCENT    0.90f   // ← 新增：AC 百分比閾值（90% = 谷值 + 90% × (峰值-谷值)）
+#define AC_THRESHOLD_PERCENT    0.85f   // ← 新增：AC 百分比閾值（90% = 谷值 + 90% × (峰值-谷值)）
 
 
 /* ============ 檢測方法選擇 ============ */

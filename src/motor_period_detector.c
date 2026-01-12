@@ -243,13 +243,14 @@ static void calculate_period_statistics(motor_period_detector_t *detector,
     pd->ac_sample_count = 0;
     pd->ac_threshold = 0.0f;
 
-    /* DC 計算保持不變 */
-    pd->dc_valid = calculate_dc_current(detector, detector->valley_buffer_idx, &pd->dc_current);
+    /*修改20260112：將DC計算移至AC time時間計算前，避免重置緩衝區*/
+    // /* DC 計算保持不變 */
+    // pd->dc_valid = calculate_dc_current(detector, detector->valley_buffer_idx, &pd->dc_current);
     
-    if (pd->dc_valid) {
-        LOG_DBG("DC (valley area avg): %.2f mA at idx %d", 
-                (double)pd->dc_current, detector->valley_buffer_idx);
-    }
+    // if (pd->dc_valid) {
+    //     LOG_DBG("DC (valley area avg): %.2f mA at idx %d", 
+    //             (double)pd->dc_current, detector->valley_buffer_idx);
+    // }
     
     /* 驗證週期是否在有效範圍內 */
     float period_ms = pd->period_time * 1000.0f;
@@ -550,6 +551,20 @@ static bool process_peak_detection(motor_period_detector_t *detector,
                 
                  /* ↓↓↓ 新增20260110：谷值確認後，計算待處理週期的 AC 並觸發回調 ↓↓↓ */
                 if (detector->pending_period.pending) {
+
+                    /*新增20260112：在重置緩衝區前計算 DC 值*/
+                    float dc_value = 0.0f;
+                    bool dc_valid = calculate_dc_current(detector, 
+                                                        detector->valley_buffer_idx, 
+                                                        &dc_value);
+                    detector->pending_period.data.dc_current = dc_value;
+                    detector->pending_period.data.dc_valid = dc_valid;
+                    
+                    if (dc_valid) {
+                        LOG_DBG("DC calculated: %.2f mA at valley_idx %d", 
+                                (double)dc_value, detector->valley_buffer_idx);
+                    }
+
                     /* 更新待處理週期的谷值時間 */
                     detector->pending_period.data.valley_time = detector->confirmed_valley_time;
                     

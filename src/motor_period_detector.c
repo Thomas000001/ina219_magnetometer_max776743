@@ -267,6 +267,30 @@ static void calculate_period_statistics(motor_period_detector_t *detector,
 }
 
 /**
+ * @brief 根據時間戳在緩衝區中找到最接近的索引
+ * @param detector 檢測器指針
+ * @param target_time 目標時間戳
+ * @return 最接近的索引，找不到返回 -1
+ */
+static int find_index_by_time(motor_period_detector_t *detector, float target_time) {
+    int n = detector->buffer_idx;
+    if (n == 0) return -1;
+    
+    int best_idx = -1;
+    float min_diff = 1e10f;
+    
+    for (int i = 0; i < n; i++) {
+        float diff = fabsf(detector->time_buffer[i] - target_time);
+        if (diff < min_diff) {
+            min_diff = diff;
+            best_idx = i;
+        }
+    }
+    
+    return best_idx;
+}
+
+/**
  * @brief 計算待處理週期的 AC 時間
  * 
  * 在谷值確認後調用，此時緩衝區包含完整的「峰值→谷值」下降數據
@@ -536,7 +560,7 @@ static bool process_peak_detection(motor_period_detector_t *detector,
                     memcpy(&detector->last_period, 
                            &detector->pending_period.data, 
                            sizeof(period_data_t));
-                    
+                
                     /* 觸發回調 */
                     if (detector->on_period_complete) {
                         detector->on_period_complete(&detector->pending_period.data);
@@ -552,14 +576,20 @@ static bool process_peak_detection(motor_period_detector_t *detector,
                             (double)detector->pending_period.data.ac_time);
                 }
 
+                /* 重置緩衝區，準備下一個週期 */
+                reset_period_buffer(detector);
+
                 detector->state = STATE_COLLECTING;
-                
+
                 /* 重置峰值追蹤，準備尋找下一個峰值 */
                 reset_peak_tracking(detector);
                 /* 將當前值作為新的峰值追蹤起點 */
                 detector->current_max = current;
                 detector->current_max_time = timestamp;
                 detector->samples_since_max = 0;
+                
+                /* 開始收集新週期的數據 */
+                add_sample_to_buffer(detector, current, voltage, timestamp);
 
                 break;
             }

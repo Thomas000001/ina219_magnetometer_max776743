@@ -32,7 +32,7 @@
 
 /* AC/DC 計算參數 */
 #define AC_DC_WINDOW_SIZE       2       // 峰值/谷值前後各取幾個樣本（總共 2*N+1 個）
-#define AC_THRESHOLD_PERCENT    0.85f   // ← 新增：AC 百分比閾值（90% = 谷值 + 90% × (峰值-谷值)）
+#define AC_THRESHOLD_PERCENT    0.95f   // ← 新增：AC 百分比閾值（90% = 谷值 + 90% × (峰值-谷值)）
 
 
 /* ============ 檢測方法選擇 ============ */

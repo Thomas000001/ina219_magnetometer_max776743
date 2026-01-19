@@ -465,11 +465,11 @@ static const struct gpio_dt_spec led2 = GPIO_DT_SPEC_GET(LED2_NODE, gpios);
 /* ====== 週期檢測配置 ====== */
 #define PERIOD_DETECT_METHOD    DETECT_METHOD_PEAK  // 使用峰值檢測法
 #define PERIOD_DETECT_MIN_VOLTAGE   5.0f                // 週期檢測啟動電壓閾值 (V)
-#define PERIODS_BEFORE_VOLTAGE_DROP 8                   // 每個電壓等級需要檢測的週期數
+#define PERIODS_BEFORE_VOLTAGE_DROP 7                   // 每個電壓等級需要檢測的週期數
 
 /* ====== 週期統計配置 ====== */
 #define PERIODS_TO_SKIP         2       /* 每個電壓等級要跳過的週期數（第1個） */
-#define PERIODS_TO_AVERAGE      8       /* 用於計算平均的週期數（第2~6個） */
+#define PERIODS_TO_AVERAGE      7       /* 用於計算平均的週期數（第2~6個） */
 
 /* ====== 電壓穩定等待時間 ====== */
 #define VOLTAGE_SETTLE_MIN_MS   100     /* 電壓穩定最小等待時間 (ms) */
@@ -778,7 +778,7 @@ static int init_ina219(void) {
         return ret;
     }
 
-    ret = ina219_set_adc_mode(&my_ina219, INA219_ADC_12BIT_8S, INA219_ADC_12BIT_8S);
+    ret = ina219_set_adc_mode(&my_ina219, INA219_ADC_12BIT_4S, INA219_ADC_12BIT_4S);
     if (ret != 0) {
         LOG_ERR("Failed to set INA219 ADC mode: %d", ret);
         return ret;

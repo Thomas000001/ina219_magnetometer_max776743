@@ -189,17 +189,27 @@ static bool calculate_dc_current(motor_period_detector_t *detector,
 }
 
 /**
- * @brief 計算週期統計數據
+ * @brief 計算週期統計數據（在谷值確認後調用）
+ * 
+ * 改進calculate_period_statistics函數：此函數現在在谷值確認後調用，確保所有時間點都正確
  */
-static void calculate_period_statistics(motor_period_detector_t *detector, 
-                                         float start_time, float end_time, float peak_current) {
-    period_data_t *pd = &detector->last_period;
+static void finalize_period_data(motor_period_detector_t *detector) {
+    pending_period_t *pp = &detector->pending_period;
+    period_data_t *pd = &pp->data;
     int n = detector->buffer_idx;
     
     if (n < MIN_SAMPLES_PER_PERIOD) {
         pd->valid = false;
         return;
     }
+    
+    /* 設定時間點 */
+    pd->start_time = pp->prev_peak_time;      // 上一個峰值時間
+    pd->end_time = pp->peak_time;             // 當前峰值時間
+    pd->peak_time = pp->peak_time;            // 峰值時間
+    pd->valley_time = detector->confirmed_valley_time;  // 谷值時間
+    pd->period_time = pd->end_time - pd->start_time;
+    // pd->period_time = pp->peak_time - pp->prev_peak_time;
     
     /* 計算基本統計 */
     float sum = 0.0f;
@@ -212,45 +222,26 @@ static void calculate_period_statistics(motor_period_detector_t *detector,
         float c = detector->current_buffer[i];
         sum += c;
         sum_sq += c * c;
-        
         if (c > max_val) max_val = c;
         if (c < min_val) min_val = c;
-        
         voltage_sum += detector->voltage_buffer[i];
     }
     
-    /* 填充週期數據 */
     pd->sample_count = n;
-    pd->start_time = start_time;
-    pd->end_time = end_time;
-    pd->peak_time = detector->current_max_time;           
-    pd->valley_time = detector->confirmed_valley_time;    
-    pd->period_time = end_time - start_time;
     pd->average_current = sum / n;
-    pd->peak_current = peak_current;
+    pd->peak_current = pp->peak_value;
     pd->min_current = min_val;
     pd->rms_current = sqrtf(sum_sq / n);
     pd->voltage = voltage_sum / n;
-    
-    /* 計算能量 (mJ) = 平均電流(mA) × 電壓(V) × 時間(s) */
     pd->energy = pd->average_current * pd->voltage * pd->period_time;
-
-    pd->ac_valid = false;
-    pd->ac_current = 0.0f;
-    pd->ac_time = 0.0f;
-    pd->ac_start_time = 0.0f;
-    pd->ac_end_time = 0.0f;
-    pd->ac_sample_count = 0;
-    pd->ac_threshold = 0.0f;
-
-    /*修改20260112：將DC計算移至AC time時間計算前，避免重置緩衝區*/
-    // /* DC 計算保持不變 */
-    // pd->dc_valid = calculate_dc_current(detector, detector->valley_buffer_idx, &pd->dc_current);
     
-    // if (pd->dc_valid) {
-    //     LOG_DBG("DC (valley area avg): %.2f mA at idx %d", 
-    //             (double)pd->dc_current, detector->valley_buffer_idx);
-    // }
+    /* 計算 DC（谷值附近平均）*/
+    pd->dc_valid = calculate_dc_current(detector, detector->valley_buffer_idx, &pd->dc_current);
+    
+    /* 計算 AC（需要谷值來計算閾值）*/
+    calculate_ac_with_threshold(detector, pp->peak_buffer_idx, 
+                                pp->peak_value, 
+                                detector->confirmed_valley_value, pd);
     
     /* 驗證週期是否在有效範圍內 */
     float period_ms = pd->period_time * 1000.0f;
@@ -262,10 +253,95 @@ static void calculate_period_statistics(motor_period_detector_t *detector,
         detector->period_sum += pd->period_time;
         detector->period_count++;
         detector->average_period = detector->period_sum / detector->period_count;
+        
+        LOG_DBG("Period finalized: %.4f s, start=%.3f, end=%.3f, peak=%.3f, valley=%.3f",
+                (double)pd->period_time, (double)pd->start_time, (double)pd->end_time,
+                (double)pd->peak_time, (double)pd->valley_time);
     } else {
         pd->valid = false;
+        LOG_WRN("Period invalid: %.1f ms (range: %d-%d ms)", 
+                (double)period_ms, MIN_PERIOD_MS, MAX_PERIOD_MS);
     }
 }
+
+/**
+ * @brief 計算週期統計數據
+ */
+// static void calculate_period_statistics(motor_period_detector_t *detector, 
+//                                          float start_time, float end_time, float peak_current) {
+//     period_data_t *pd = &detector->last_period;
+//     int n = detector->buffer_idx;
+    
+//     if (n < MIN_SAMPLES_PER_PERIOD) {
+//         pd->valid = false;
+//         return;
+//     }
+    
+//     /* 計算基本統計 */
+//     float sum = 0.0f;
+//     float sum_sq = 0.0f;
+//     float max_val = -1e10f;
+//     float min_val = 1e10f;
+//     float voltage_sum = 0.0f;
+    
+//     for (int i = 0; i < n; i++) {
+//         float c = detector->current_buffer[i];
+//         sum += c;
+//         sum_sq += c * c;
+        
+//         if (c > max_val) max_val = c;
+//         if (c < min_val) min_val = c;
+        
+//         voltage_sum += detector->voltage_buffer[i];
+//     }
+    
+//     /* 填充週期數據 */
+//     pd->sample_count = n;
+//     pd->start_time = start_time;
+//     pd->end_time = end_time;
+//     pd->peak_time = detector->current_max_time;           
+//     pd->valley_time = detector->confirmed_valley_time;    
+//     pd->period_time = end_time - start_time;
+//     pd->average_current = sum / n;
+//     pd->peak_current = peak_current;
+//     pd->min_current = min_val;
+//     pd->rms_current = sqrtf(sum_sq / n);
+//     pd->voltage = voltage_sum / n;
+    
+//     /* 計算能量 (mJ) = 平均電流(mA) × 電壓(V) × 時間(s) */
+//     pd->energy = pd->average_current * pd->voltage * pd->period_time;
+
+//     pd->ac_valid = false;
+//     pd->ac_current = 0.0f;
+//     pd->ac_time = 0.0f;
+//     pd->ac_start_time = 0.0f;
+//     pd->ac_end_time = 0.0f;
+//     pd->ac_sample_count = 0;
+//     pd->ac_threshold = 0.0f;
+
+//     /*修改20260112：將DC計算移至AC time時間計算前，避免重置緩衝區*/
+//     // /* DC 計算保持不變 */
+//     // pd->dc_valid = calculate_dc_current(detector, detector->valley_buffer_idx, &pd->dc_current);
+    
+//     // if (pd->dc_valid) {
+//     //     LOG_DBG("DC (valley area avg): %.2f mA at idx %d", 
+//     //             (double)pd->dc_current, detector->valley_buffer_idx);
+//     // }
+    
+//     /* 驗證週期是否在有效範圍內 */
+//     float period_ms = pd->period_time * 1000.0f;
+//     if (period_ms >= MIN_PERIOD_MS && period_ms <= MAX_PERIOD_MS) {
+//         pd->valid = true;
+        
+//         /* 更新週期統計 */
+//         detector->measured_period = pd->period_time;
+//         detector->period_sum += pd->period_time;
+//         detector->period_count++;
+//         detector->average_period = detector->period_sum / detector->period_count;
+//     } else {
+//         pd->valid = false;
+//     }
+// }
 
 /**
  * @brief 根據時間戳在緩衝區中找到最接近的索引
@@ -550,47 +626,66 @@ static bool process_peak_detection(motor_period_detector_t *detector,
                         (double)detector->current_min_time);
                 
                  /* ↓↓↓ 新增20260110：谷值確認後，計算待處理週期的 AC 並觸發回調 ↓↓↓ */
-                if (detector->pending_period.pending) {
+                // if (detector->pending_period.pending) {
 
-                    /*新增20260112：在重置緩衝區前計算 DC 值*/
-                    float dc_value = 0.0f;
-                    bool dc_valid = calculate_dc_current(detector, 
-                                                        detector->valley_buffer_idx, 
-                                                        &dc_value);
-                    detector->pending_period.data.dc_current = dc_value;
-                    detector->pending_period.data.dc_valid = dc_valid;
+                //     /*新增20260112：在重置緩衝區前計算 DC 值*/
+                //     float dc_value = 0.0f;
+                //     bool dc_valid = calculate_dc_current(detector, 
+                //                                         detector->valley_buffer_idx, 
+                //                                         &dc_value);
+                //     detector->pending_period.data.dc_current = dc_value;
+                //     detector->pending_period.data.dc_valid = dc_valid;
                     
-                    if (dc_valid) {
-                        LOG_DBG("DC calculated: %.2f mA at valley_idx %d", 
-                                (double)dc_value, detector->valley_buffer_idx);
-                    }
+                //     if (dc_valid) {
+                //         LOG_DBG("DC calculated: %.2f mA at valley_idx %d", 
+                //                 (double)dc_value, detector->valley_buffer_idx);
+                //     }
 
-                    /* 更新待處理週期的谷值時間 */
-                    detector->pending_period.data.valley_time = detector->confirmed_valley_time;
+                //     /* 更新待處理週期的谷值時間 */
+                //     detector->pending_period.data.valley_time = detector->confirmed_valley_time;
                     
-                    /* 計算 AC 時間 */
-                    calculate_pending_ac(detector);
+                //     /* 計算 AC 時間 */
+                //     calculate_pending_ac(detector);
                     
-                    /* 複製回 last_period 以保持一致性 */
-                    memcpy(&detector->last_period, 
-                           &detector->pending_period.data, 
-                           sizeof(period_data_t));
+                //     /* 複製回 last_period 以保持一致性 */
+                //     memcpy(&detector->last_period, 
+                //            &detector->pending_period.data, 
+                //            sizeof(period_data_t));
                 
+                //     /* 觸發回調 */
+                //     if (detector->on_period_complete) {
+                //         detector->on_period_complete(&detector->pending_period.data);
+                //     }
+                    
+                //     period_complete = true;
+                    
+                //     /* 清除待處理標記 */
+                //     detector->pending_period.pending = false;
+                    
+                //     LOG_DBG("Period complete with AC: time=%.4f s, AC_time=%.4f s", 
+                //             (double)detector->pending_period.data.period_time,
+                //             (double)detector->pending_period.data.ac_time);
+                // }
+                 /* ===== 新增20260114：如果有待處理的週期，現在完成它 ===== */
+                if (detector->pending_period.pending) {
+                    /* 計算完整的週期統計（包括 AC/DC）*/
+                    finalize_period_data(detector);
+                    
+                    /* 複製到 last_period */
+                    memcpy(&detector->last_period, 
+                        &detector->pending_period.data, 
+                        sizeof(period_data_t));
+                    
                     /* 觸發回調 */
-                    if (detector->on_period_complete) {
-                        detector->on_period_complete(&detector->pending_period.data);
+                    if (detector->last_period.valid && detector->on_period_complete) {
+                        detector->on_period_complete(&detector->last_period);
                     }
                     
-                    period_complete = true;
+                    period_complete = detector->last_period.valid;
                     
                     /* 清除待處理標記 */
                     detector->pending_period.pending = false;
-                    
-                    LOG_DBG("Period complete with AC: time=%.4f s, AC_time=%.4f s", 
-                            (double)detector->pending_period.data.period_time,
-                            (double)detector->pending_period.data.ac_time);
                 }
-
                 /* 重置緩衝區，準備下一個週期 */
                 reset_period_buffer(detector);
 
@@ -606,7 +701,7 @@ static bool process_peak_detection(motor_period_detector_t *detector,
                 /* 開始收集新週期的數據 */
                 add_sample_to_buffer(detector, current, voltage, timestamp);
 
-                break;
+                break;    
             }
             
         case STATE_COLLECTING:
@@ -662,45 +757,79 @@ static bool process_peak_detection(motor_period_detector_t *detector,
                 detector->confirmed_peak_value = detector->current_max;
                 detector->confirmed_peak_time = detector->current_max_time;
                 detector->peak_confirmed = true;
+                
 
+                float this_peak_value = detector->current_max;
+                float this_peak_time = detector->current_max_time;
                 float time_diff = detector->current_max_time - detector->last_peak_time;
                 float time_diff_ms = time_diff * 1000.0f;
                 
-                if (time_diff_ms >= MIN_PERIOD_MS && time_diff_ms <= MAX_PERIOD_MS) {
-                    /* 保存當前峰值資訊 */
-                    float this_peak_value = detector->current_max;
-                    float this_peak_time = detector->current_max_time;
+                // if (time_diff_ms >= MIN_PERIOD_MS && time_diff_ms <= MAX_PERIOD_MS) {
+                //     /* 保存當前峰值資訊 */
+                //     float this_peak_value = detector->current_max;
+                //     float this_peak_time = detector->current_max_time;
                     
-                    /* 計算週期統計 */
-                    calculate_period_statistics(detector, 
-                                                detector->last_peak_time, 
-                                                this_peak_time, 
-                                                this_peak_value);
+                //     /* 計算週期統計 */
+                //     calculate_period_statistics(detector, 
+                //                                 detector->last_peak_time, 
+                //                                 this_peak_time, 
+                //                                 this_peak_value);
                     
-                    if (detector->last_period.valid) {
-                         /* 暫存週期數據，等待谷值確認後計算 AC */
-                        memcpy(&detector->pending_period.data, 
-                               &detector->last_period, 
-                               sizeof(period_data_t));
-                        detector->pending_period.peak_value = this_peak_value;
-                        detector->pending_period.peak_buffer_idx = detector->peak_buffer_idx;
-                        detector->pending_period.pending = true;
+                //     if (detector->last_period.valid) {
+                //          /* 暫存週期數據，等待谷值確認後計算 AC */
+                //         memcpy(&detector->pending_period.data, 
+                //                &detector->last_period, 
+                //                sizeof(period_data_t));
+                //         detector->pending_period.peak_value = this_peak_value;
+                //         detector->pending_period.peak_buffer_idx = detector->peak_buffer_idx;
+                //         detector->pending_period.pending = true;
                         
-                        LOG_DBG("Period pending AC calculation: %.3f s", 
-                                (double)detector->last_period.period_time);
-                    }
+                //         LOG_DBG("Period pending AC calculation: %.3f s", 
+                //                 (double)detector->last_period.period_time);
+                //     }
                     
-                    /* 更新上一個峰值資訊 */
+                //     /* 更新上一個峰值資訊 */
+                //     detector->last_peak_value = this_peak_value;
+                //     detector->last_peak_time = this_peak_time;
+                    
+                    
+                //     /* 進入等待谷值狀態 */
+                //     detector->state = STATE_WAITING_VALLEY;
+                //     reset_valley_tracking(detector, current, timestamp);
+                    
+                //     /* 繼續收集數據（當前樣本屬於下一個週期） */
+                //     add_sample_to_buffer(detector, current, voltage, timestamp);
+                if (time_diff_ms >= MIN_PERIOD_MS && time_diff_ms <= MAX_PERIOD_MS) {
+                    /* 有效的峰值 - 創建待處理週期 */
+                    
+                    
+                    /* 保存待處理週期信息 */
+                    detector->pending_period.prev_peak_time = detector->last_peak_time;
+                    detector->pending_period.prev_peak_value = detector->last_peak_value;
+                    detector->pending_period.peak_value = this_peak_value;
+                    detector->pending_period.peak_time = this_peak_time;
+                    detector->pending_period.peak_buffer_idx = detector->peak_buffer_idx;
+                    detector->pending_period.pending = true;
+                    detector->pending_period.statistics_calculated = false;
+                    
+                    /* 初始化 period_data */
+                    memset(&detector->pending_period.data, 0, sizeof(period_data_t));
+                    
+                    LOG_DBG("Period pending: prev_peak=%.3f, curr_peak=%.3f",
+                            (double)detector->last_peak_time, (double)this_peak_time);
+                    
+                    /* 更新已確認峰值（用於下次谷值驗證）*/
+                    detector->confirmed_peak_value = this_peak_value;
+                    detector->confirmed_peak_time = this_peak_time;
+                    detector->peak_confirmed = true;
+                    
+                    /* 更新 last_peak */
                     detector->last_peak_value = this_peak_value;
                     detector->last_peak_time = this_peak_time;
-                    
                     
                     /* 進入等待谷值狀態 */
                     detector->state = STATE_WAITING_VALLEY;
                     reset_valley_tracking(detector, current, timestamp);
-                    
-                    /* 繼續收集數據（當前樣本屬於下一個週期） */
-                    add_sample_to_buffer(detector, current, voltage, timestamp);
                     
                 } else if (time_diff_ms > MAX_PERIOD_MS) {
                     /* 週期過長，可能漏檢了峰值，重新開始 */
@@ -737,82 +866,82 @@ static bool process_peak_detection(motor_period_detector_t *detector,
  * 原理：檢測信號從低於直流偏移到高於直流偏移的穿越點（上升沿零交叉）
  *      兩個連續上升沿零交叉之間為一個週期
  */
-static bool process_zero_crossing(motor_period_detector_t *detector,
-                                   float current, float voltage, float timestamp) {
-    bool period_complete = false;
+// static bool process_zero_crossing(motor_period_detector_t *detector,
+//                                    float current, float voltage, float timestamp) {
+//     bool period_complete = false;
     
-    /* 更新直流偏移（使用慢速指數移動平均）*/
-    float alpha = 0.001f;
-    detector->dc_offset = alpha * current + (1.0f - alpha) * detector->dc_offset;
+//     /* 更新直流偏移（使用慢速指數移動平均）*/
+//     float alpha = 0.001f;
+//     detector->dc_offset = alpha * current + (1.0f - alpha) * detector->dc_offset;
     
-    /* 判斷當前值相對於偏移量的位置 */
-    bool current_above = (current > detector->dc_offset);
+//     /* 判斷當前值相對於偏移量的位置 */
+//     bool current_above = (current > detector->dc_offset);
     
-    /* 檢測上升沿零交叉 */
-    bool rising_cross = (!detector->prev_above_offset && current_above);
+//     /* 檢測上升沿零交叉 */
+//     bool rising_cross = (!detector->prev_above_offset && current_above);
     
-    switch (detector->state) {
-        case STATE_INIT:
-            /* 初始化直流偏移 */
-            detector->dc_offset = current;
-            detector->prev_above_offset = current_above;
-            detector->state = STATE_WAITING_FIRST_PEAK;
-            break;
+//     switch (detector->state) {
+//         case STATE_INIT:
+//             /* 初始化直流偏移 */
+//             detector->dc_offset = current;
+//             detector->prev_above_offset = current_above;
+//             detector->state = STATE_WAITING_FIRST_PEAK;
+//             break;
             
-        case STATE_WAITING_FIRST_PEAK:
-            if (rising_cross) {
-                /* 第一個零交叉點 */
-                detector->last_peak_time = timestamp;
-                detector->state = STATE_COLLECTING;
-                reset_period_buffer(detector);
+//         case STATE_WAITING_FIRST_PEAK:
+//             if (rising_cross) {
+//                 /* 第一個零交叉點 */
+//                 detector->last_peak_time = timestamp;
+//                 detector->state = STATE_COLLECTING;
+//                 reset_period_buffer(detector);
                 
-                LOG_DBG("First zero crossing at %.3f s, DC offset: %.2f mA", 
-                        (double)timestamp, (double)detector->dc_offset);
-            }
-            break;
+//                 LOG_DBG("First zero crossing at %.3f s, DC offset: %.2f mA", 
+//                         (double)timestamp, (double)detector->dc_offset);
+//             }
+//             break;
             
-        case STATE_COLLECTING:
-            add_sample_to_buffer(detector, current, voltage, timestamp);
+//         case STATE_COLLECTING:
+//             add_sample_to_buffer(detector, current, voltage, timestamp);
             
-            if (rising_cross) {
-                /* 下一個零交叉點 - 週期完成 */
-                float time_diff = timestamp - detector->last_peak_time;
-                float time_diff_ms = time_diff * 1000.0f;
+//             if (rising_cross) {
+//                 /* 下一個零交叉點 - 週期完成 */
+//                 float time_diff = timestamp - detector->last_peak_time;
+//                 float time_diff_ms = time_diff * 1000.0f;
                 
-                if (time_diff_ms >= MIN_PERIOD_MS && time_diff_ms <= MAX_PERIOD_MS) {
-                    float this_peak_value = detector->current_max;
+//                 if (time_diff_ms >= MIN_PERIOD_MS && time_diff_ms <= MAX_PERIOD_MS) {
+//                     float this_peak_value = detector->current_max;
                     
-                    calculate_period_statistics(detector,
-                                                detector->last_peak_time,  // 上一個零交叉時間
-                                                timestamp,                  // 當前零交叉時間
-                                                this_peak_value);           // 週期內的峰值電流
+//                     calculate_period_statistics(detector,
+//                                                 detector->last_peak_time,  // 上一個零交叉時間
+//                                                 timestamp,                  // 當前零交叉時間
+//                                                 this_peak_value);           // 週期內的峰值電流
                     
-                    if (detector->last_period.valid) {
-                        period_complete = true;
+//                     if (detector->last_period.valid) {
+//                         period_complete = true;
                         
-                        if (detector->on_period_complete) {
-                            detector->on_period_complete(&detector->last_period);
-                        }
-                    }
-                }
+//                         if (detector->on_period_complete) {
+//                             detector->on_period_complete(&detector->last_period);
+//                         }
+//                     }
+//                 }
                 
-                /* 準備下一個週期 */
-                detector->last_peak_time = timestamp;
-                reset_period_buffer(detector);
-            }
-            break;
+//                 /* 準備下一個週期 */
+//                 detector->last_peak_time = timestamp;
+//                 reset_period_buffer(detector);
+//             }
+//             break;
             
-        case STATE_PERIOD_COMPLETE:
-            detector->state = STATE_COLLECTING;
-            break;
-    }
+//         case STATE_PERIOD_COMPLETE:
+//             detector->state = STATE_COLLECTING;
+//             break;
+//     }
     
-    /* 更新前一個值的狀態 */
-    detector->prev_value = current;
-    detector->prev_above_offset = current_above;
+//     /* 更新前一個值的狀態 */
+//     detector->prev_value = current;
+//     detector->prev_above_offset = current_above;
     
-    return period_complete;
-}
+//     return period_complete;
+// }
 
 /* ============ 閾值檢測法 ============ */
 
@@ -822,76 +951,76 @@ static bool process_zero_crossing(motor_period_detector_t *detector,
  * 原理：設定上下閾值，檢測信號從下閾值以下上升到上閾值以上的時刻
  *      兩個連續上升穿越之間為一個週期
  */
-static bool process_threshold(motor_period_detector_t *detector,
-                               float current, float voltage, float timestamp) {
-    bool period_complete = false;
+// static bool process_threshold(motor_period_detector_t *detector,
+//                                float current, float voltage, float timestamp) {
+//     bool period_complete = false;
     
-    /* 判斷當前狀態 */
-    bool now_above = (current > detector->threshold_high);
-    bool now_below = (current < detector->threshold_low);
+//     /* 判斷當前狀態 */
+//     bool now_above = (current > detector->threshold_high);
+//     bool now_below = (current < detector->threshold_low);
     
-    switch (detector->state) {
-        case STATE_INIT:
-            detector->above_threshold = now_above;
-            detector->state = STATE_WAITING_FIRST_PEAK;
-            break;
+//     switch (detector->state) {
+//         case STATE_INIT:
+//             detector->above_threshold = now_above;
+//             detector->state = STATE_WAITING_FIRST_PEAK;
+//             break;
             
-        case STATE_WAITING_FIRST_PEAK:
-            /* 等待從低到高的穿越 */
-            if (!detector->above_threshold && now_above) {
-                detector->last_peak_time = timestamp;
-                detector->state = STATE_COLLECTING;
-                reset_period_buffer(detector);
-                detector->above_threshold = true;
+//         case STATE_WAITING_FIRST_PEAK:
+//             /* 等待從低到高的穿越 */
+//             if (!detector->above_threshold && now_above) {
+//                 detector->last_peak_time = timestamp;
+//                 detector->state = STATE_COLLECTING;
+//                 reset_period_buffer(detector);
+//                 detector->above_threshold = true;
                 
-                LOG_DBG("First threshold crossing at %.3f s", (double)timestamp);
-            } else if (now_below) {
-                detector->above_threshold = false;
-            }
-            break;
+//                 LOG_DBG("First threshold crossing at %.3f s", (double)timestamp);
+//             } else if (now_below) {
+//                 detector->above_threshold = false;
+//             }
+//             break;
             
-        case STATE_COLLECTING:
-            add_sample_to_buffer(detector, current, voltage, timestamp);
+//         case STATE_COLLECTING:
+//             add_sample_to_buffer(detector, current, voltage, timestamp);
             
-            /* 檢測狀態變化 */
-            if (now_below) {
-                detector->above_threshold = false;
-            } else if (!detector->above_threshold && now_above) {
-                /* 新的上升穿越 - 週期完成 */
-                float time_diff = timestamp - detector->last_peak_time;
-                float time_diff_ms = time_diff * 1000.0f;
+//             /* 檢測狀態變化 */
+//             if (now_below) {
+//                 detector->above_threshold = false;
+//             } else if (!detector->above_threshold && now_above) {
+//                 /* 新的上升穿越 - 週期完成 */
+//                 float time_diff = timestamp - detector->last_peak_time;
+//                 float time_diff_ms = time_diff * 1000.0f;
                 
-                if (time_diff_ms >= MIN_PERIOD_MS && time_diff_ms <= MAX_PERIOD_MS) {
-                    float this_peak_value = detector->current_max;
+//                 if (time_diff_ms >= MIN_PERIOD_MS && time_diff_ms <= MAX_PERIOD_MS) {
+//                     float this_peak_value = detector->current_max;
                     
-                    calculate_period_statistics(detector,
-                                                detector->last_peak_time,  // 上一個零交叉時間
-                                                timestamp,                  // 當前零交叉時間
-                                                this_peak_value);           // 週期內的峰值電流
+//                     calculate_period_statistics(detector,
+//                                                 detector->last_peak_time,  // 上一個零交叉時間
+//                                                 timestamp,                  // 當前零交叉時間
+//                                                 this_peak_value);           // 週期內的峰值電流
                     
-                    if (detector->last_period.valid) {
-                        period_complete = true;
+//                     if (detector->last_period.valid) {
+//                         period_complete = true;
                         
-                        if (detector->on_period_complete) {
-                            detector->on_period_complete(&detector->last_period);
-                        }
-                    }
-                }
+//                         if (detector->on_period_complete) {
+//                             detector->on_period_complete(&detector->last_period);
+//                         }
+//                     }
+//                 }
                 
-                /* 準備下一個週期 */
-                detector->last_peak_time = timestamp;
-                reset_period_buffer(detector);
-                detector->above_threshold = true;
-            }
-            break;
+//                 /* 準備下一個週期 */
+//                 detector->last_peak_time = timestamp;
+//                 reset_period_buffer(detector);
+//                 detector->above_threshold = true;
+//             }
+//             break;
             
-        case STATE_PERIOD_COMPLETE:
-            detector->state = STATE_COLLECTING;
-            break;
-    }
+//         case STATE_PERIOD_COMPLETE:
+//             detector->state = STATE_COLLECTING;
+//             break;
+//     }
     
-    return period_complete;
-}
+//     return period_complete;
+// }
 
 /* ============ 公開 API 實現 ============ */
 
@@ -947,11 +1076,11 @@ bool period_detector_process(motor_period_detector_t *detector,
         case DETECT_METHOD_PEAK:
             return process_peak_detection(detector, current, voltage, timestamp);
             
-        case DETECT_METHOD_ZERO_CROSS:
-            return process_zero_crossing(detector, current, voltage, timestamp);
+        // case DETECT_METHOD_ZERO_CROSS:
+        //     return process_zero_crossing(detector, current, voltage, timestamp);
             
-        case DETECT_METHOD_THRESHOLD:
-            return process_threshold(detector, current, voltage, timestamp);
+        // case DETECT_METHOD_THRESHOLD:
+        //     return process_threshold(detector, current, voltage, timestamp);
             
         default:
             return false;

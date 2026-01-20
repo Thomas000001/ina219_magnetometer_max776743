@@ -460,16 +460,16 @@ static const struct gpio_dt_spec led2 = GPIO_DT_SPEC_GET(LED2_NODE, gpios);
 #define INA219_SHUNT_RESISTANCE    0.1f
 #define INA219_MAX_EXPECTED_CURRENT 0.5f
 #define INA219_I2C_ADDRESS         0x40
-#define SENSOR_SAMPLE_INTERVAL_MS  1
+#define SENSOR_SAMPLE_INTERVAL_MS  3
 
 /* ====== 週期檢測配置 ====== */
 #define PERIOD_DETECT_METHOD    DETECT_METHOD_PEAK  // 使用峰值檢測法
 #define PERIOD_DETECT_MIN_VOLTAGE   5.0f                // 週期檢測啟動電壓閾值 (V)
-#define PERIODS_BEFORE_VOLTAGE_DROP 7                   // 每個電壓等級需要檢測的週期數
+#define PERIODS_BEFORE_VOLTAGE_DROP 50                   // 每個電壓等級需要檢測的週期數
 
 /* ====== 週期統計配置 ====== */
 #define PERIODS_TO_SKIP         2       /* 每個電壓等級要跳過的週期數（第1個） */
-#define PERIODS_TO_AVERAGE      7       /* 用於計算平均的週期數（第2~6個） */
+#define PERIODS_TO_AVERAGE      50       /* 用於計算平均的週期數（第2~6個） */
 
 /* ====== 電壓穩定等待時間 ====== */
 #define VOLTAGE_SETTLE_MIN_MS   100     /* 電壓穩定最小等待時間 (ms) */
@@ -478,7 +478,7 @@ static const struct gpio_dt_spec led2 = GPIO_DT_SPEC_GET(LED2_NODE, gpios);
 
 
 /* ============ 執行緒配置 ============ */
-#define INA219_STACK_SIZE 2048
+#define INA219_STACK_SIZE 4096
 #define INA219_PRIORITY 7
 
 K_THREAD_STACK_DEFINE(ina219_stack, INA219_STACK_SIZE);
@@ -839,12 +839,12 @@ void ina219_read_thread_entry(void *arg1, void *arg2, void *arg3) {
             period_detect_enabled = false;
 
             first_sample = false;
-            printk("INA219 開始記錄電流（週期檢測已啟用）\n");
-            printk("  - ADC 模式: 12BIT_4S\n");
-            printk("  - 取樣間隔: %d ms\n", SENSOR_SAMPLE_INTERVAL_MS);
-            printk("  - 檢測方法: 峰值檢測法\n");
-            printk("  - 每電壓等級: 檢測%d個週期，跳過第1個，對後%d個取平均\n",
-                    PERIODS_BEFORE_VOLTAGE_DROP, PERIODS_TO_AVERAGE);
+            LOG_INF("INA219 starts reading current data");
+            LOG_INF("  - sample interval : %d ms", SENSOR_SAMPLE_INTERVAL_MS);
+            LOG_INF("  - detection method: Peak Detection");
+            LOG_INF("  - periods per voltage level: detect %d periods, skip first %d, average next %d",
+                    PERIODS_BEFORE_VOLTAGE_DROP, PERIODS_TO_SKIP, PERIODS_TO_AVERAGE);
+            
         }
 
         // 讀取電流值
@@ -939,7 +939,7 @@ void shutdown_sbb0(void) {
     current_set_voltage = 0.0f;
     
     gpio_pin_set_dt(&led1, 0);
-    printk("SBB0 已關閉\n");
+    LOG_INF("SBB0 closed");
 }
 
 // 檢查是否應該停止（用於可中斷的延遲）
@@ -986,13 +986,15 @@ bool interruptible_delay_minutes(int minutes) {
 /* ====== 等待指定數量的週期完成 ====== */
 bool wait_for_periods(int num_periods, float voltage, int timeout_seconds)  {
 
-    k_mutex_lock(&uart_mutex, K_FOREVER);
-    printf("  等待 %d 個週期完成 (電壓 = %.2fV)...\n", num_periods, (double)voltage);
-    k_mutex_unlock(&uart_mutex);
+    // k_mutex_lock(&uart_mutex, K_FOREVER);
+    // printf("  等待 %d 個週期完成 (電壓 = %.2fV)...\n", num_periods, (double)voltage);
+    LOG_INF("Waiting for %d periods to complete at %.2f V...", num_periods, (double)voltage);
+    // k_mutex_unlock(&uart_mutex);
 
-    k_mutex_lock(&period_mutex, K_FOREVER);
+    // k_mutex_lock(&period_mutex, K_FOREVER);
 
-    printf("確認每次下降電壓後是否有重置計數器...\n");
+    // printf("確認每次下降電壓後是否有重置計數器...\n");
+    LOG_INF("checking after dropping voltage whether resetting the counter...");
 
     reset_period_accumulator();
 
@@ -1005,10 +1007,11 @@ bool wait_for_periods(int num_periods, float voltage, int timeout_seconds)  {
     
     /* 確保週期檢測已啟用 */
     period_detect_enabled = true;
-    printf("\n週期檢測已啟動\n");
+    LOG_INF("Period detection enabled");
+
     periods_waiting = true;  /* 啟動等待，從這一刻開始計數 */
-    printf("\n開始週期計數\n");
-    k_mutex_unlock(&period_mutex);
+    LOG_INF("Starting period counting");
+    // k_mutex_unlock(&period_mutex);
     
     int elapsed_100ms = 0;
     int timeout_100ms = timeout_seconds * 10;
@@ -1080,9 +1083,9 @@ bool soft_start_sbb0(float start_voltage, float target_voltage,
 
     float dv_dt = step_voltage / (step_delay_ms / 1000.0f);
 
-    printk("\n【軟啟動】開始\n");
-    printk("  起始電壓: %.2fV -> 目標電壓: %.2fV\n", (double)start_voltage, (double)target_voltage);
-    printk("  dv/dt: %.2f V/s\n", (double)dv_dt);
+
+    LOG_INF("soft start parameters: start=%.2fV, target=%.2fV, step=%.2fV, delay=%dms",
+            (double)start_voltage, (double)target_voltage, (double)step_voltage, step_delay_ms);
 
     // 設置起始電壓並開啟輸出
     k_mutex_lock(&i2c_mutex, K_FOREVER);
@@ -1093,7 +1096,8 @@ bool soft_start_sbb0(float start_voltage, float target_voltage,
     k_mutex_unlock(&i2c_mutex);
     
     if (ret != MAX77643_NO_ERROR) {
-        printk("開啟 SBB0 失敗: %d\n", ret);
+        // printk("開啟 SBB0 失敗: %d\n", ret);
+        LOG_ERR("Failed to start SBB0: %d", ret);
         return false;
     }
 
@@ -1101,7 +1105,8 @@ bool soft_start_sbb0(float start_voltage, float target_voltage,
     current_set_voltage = start_voltage;
     
     gpio_pin_set_dt(&led1, 1);  // LED1 亮起表示輸出開啟
-    printk("SBB0 已開啟，起始電壓: %.2fV\n", (double)start_voltage);
+    // printk("SBB0 已開啟，起始電壓: %.2fV\n", (double)start_voltage);
+    LOG_INF("SBB0 started at %.2f V", (double)start_voltage);
 
     if (!interruptible_delay_ms(step_delay_ms)) {
         return false;
@@ -1110,7 +1115,8 @@ bool soft_start_sbb0(float start_voltage, float target_voltage,
     // 逐步上升電壓
     while (current_voltage < target_voltage - 0.01f) {
         if (should_stop()) {
-            printk("軟啟動被中斷\n");
+            // printk("軟啟動被中斷\n");
+            LOG_INF("Soft start interrupted");
             return false;
         }
 
@@ -1124,16 +1130,18 @@ bool soft_start_sbb0(float start_voltage, float target_voltage,
         k_mutex_unlock(&i2c_mutex);
         
         if (ret != MAX77643_NO_ERROR) {
-            printk("設置電壓失敗: %d\n", ret);
+            // printk("設置電壓失敗: %d\n", ret);
+            LOG_ERR("Failed to set voltage: %d", ret);
             return false;
         }
 
         /* ====== 更新全域電壓變數 ====== */
         current_set_voltage = current_voltage;
 
-        k_mutex_lock(&uart_mutex, K_FOREVER);
-        printf("  電壓: %.2fV\n", (double)current_voltage);
-        k_mutex_unlock(&uart_mutex);
+        // k_mutex_lock(&uart_mutex, K_FOREVER);
+        // printf("  電壓: %.2fV\n", (double)current_voltage);
+        // k_mutex_unlock(&uart_mutex);
+        LOG_DBG("Soft starting... Voltage: %.2f V", (double)current_voltage);
 
         if (!interruptible_delay_ms(step_delay_ms)) {
             return false;
@@ -1148,9 +1156,10 @@ bool soft_start_sbb0(float start_voltage, float target_voltage,
     /* ====== 更新全域電壓變數為目標值 ====== */
     current_set_voltage = target_voltage;
 
-    k_mutex_lock(&uart_mutex, K_FOREVER);
-    printf("【軟啟動完成】目標電壓: %.2fV\n", (double)target_voltage);
-    k_mutex_unlock(&uart_mutex);
+    // k_mutex_lock(&uart_mutex, K_FOREVER);
+    // printf("【軟啟動完成】目標電壓: %.2fV\n", (double)target_voltage);
+    // k_mutex_unlock(&uart_mutex);
+    LOG_INF("Soft start complete. Target voltage: %.2f V", (double)target_voltage);
 
     return true;
 }
@@ -1158,7 +1167,8 @@ bool soft_start_sbb0(float start_voltage, float target_voltage,
 bool direct_start_sbb0(float voltage) {
     int ret;
 
-    printk("\n【直接啟動】設置電壓: %.2fV\n", (double)voltage);
+    // printk("\n【直接啟動】設置電壓: %.2fV\n", (double)voltage);
+    LOG_INF("Direct starting SBB0 to %.2f V", (double)voltage);
 
     k_mutex_lock(&i2c_mutex, K_FOREVER);
     
@@ -1166,7 +1176,8 @@ bool direct_start_sbb0(float voltage) {
     ret = max77643_set_tv_sbb(&max77643_device, 0, voltage);
     if (ret != MAX77643_NO_ERROR) {
         k_mutex_unlock(&i2c_mutex);
-        printk("設置電壓失敗: %d\n", ret);
+        // printk("設置電壓失敗: %d\n", ret);
+        LOG_ERR("Failed to set voltage: %d", ret);
         return false;
     }
     
@@ -1175,7 +1186,8 @@ bool direct_start_sbb0(float voltage) {
     k_mutex_unlock(&i2c_mutex);
     
     if (ret != MAX77643_NO_ERROR) {
-        printk("開啟 SBB0 失敗: %d\n", ret);
+        // printk("開啟 SBB0 失敗: %d\n", ret);
+        LOG_ERR("Failed to start SBB0: %d", ret);
         return false;
     }
 
@@ -1183,7 +1195,8 @@ bool direct_start_sbb0(float voltage) {
     current_set_voltage = voltage;
     
     gpio_pin_set_dt(&led1, 1);  /* LED1 亮起表示輸出開啟 */
-    printk("SBB0 已開啟，電壓: %.2fV\n", (double)voltage);
+    // printk("SBB0 已開啟，電壓: %.2fV\n", (double)voltage);
+    LOG_INF("SBB0 started at %.2f V", (double)voltage);
 
     return true;
 }
@@ -1198,15 +1211,21 @@ void system_start(void) {
     
     gpio_pin_set_dt(&led2, 1);  // LED2 亮起表示系統運行中
 
-    printk("\n========================================\n");
-    printk("  系統啟動：電壓輸出 + 電流記錄\n");
-    printk("========================================\n");
-    printk("按 Button 2 停止\n");
-    printk("----------------------------------------\n");
-    printk("週期檢測配置:\n");
-    printk("  - 每電壓等級檢測: %d 個週期\n", PERIODS_BEFORE_VOLTAGE_DROP);
-    printk("  - 跳過前: %d 個週期\n", PERIODS_TO_SKIP);
-    printk("  - 用於平均: %d 個週期\n", PERIODS_TO_AVERAGE);
+    // printk("\n========================================\n");
+    // printk("  系統啟動：電壓輸出 + 電流記錄\n");
+    // printk("========================================\n");
+    // printk("按 Button 2 停止\n");
+    // printk("----------------------------------------\n");
+    // printk("週期檢測配置:\n");
+    // printk("  - 每電壓等級檢測: %d 個週期\n", PERIODS_BEFORE_VOLTAGE_DROP);
+    // printk("  - 跳過前: %d 個週期\n", PERIODS_TO_SKIP);
+    // printk("  - 用於平均: %d 個週期\n", PERIODS_TO_AVERAGE);
+    LOG_INF("System start: voltage output + current logging"); 
+    LOG_INF("Press Button 2 to stop");
+    LOG_INF("Period detection configuration:");
+    LOG_INF("  - Periods per voltage level: %d", PERIODS_BEFORE_VOLTAGE_DROP);
+    LOG_INF("  - Periods to skip: %d", PERIODS_TO_SKIP);
+    LOG_INF("  - Periods to average: %d", PERIODS_TO_AVERAGE);
 
     // 啟動 INA219 電流記錄
     ina219_logging_active = true;
@@ -1214,7 +1233,8 @@ void system_start(void) {
     // 配置電流限制
     ret = configure_sbb0_current_limit();
     if (ret != MAX77643_NO_ERROR) {
-        printk("配置電流限制失敗\n");
+        // printk("配置電流限制失敗\n");
+        LOG_ERR("Failed to configure current limit");
         goto system_stop;
     }
 
@@ -1226,21 +1246,26 @@ void system_start(void) {
     // }
 
     // 階段一：直接啟動
-    printf("\n【階段 1】直接啟動到 %.1fV\n", (double)TARGET_VOLTAGE_V);
+    // printf("\n【階段 1】直接啟動到 %.1fV\n", (double)TARGET_VOLTAGE_V);
+    LOG_DBG("Stage 1: Direct start to %.1f V", (double)TARGET_VOLTAGE_V);
     if (!direct_start_sbb0(TARGET_VOLTAGE_V)) {
         goto system_stop;
     }
 
     // 階段二：維持電壓
-    printf("\n【階段 2】維持 %.1fV 電壓 %d 分鐘\n", (double)TARGET_VOLTAGE_V, HOLD_TIME_MIN);
+    // printf("\n【階段 2】維持 %.1fV 電壓 %d 分鐘\n", (double)TARGET_VOLTAGE_V, HOLD_TIME_MIN);
+    LOG_DBG("Stage 2: Hold %.1f V for %d minutes", (double)TARGET_VOLTAGE_V, HOLD_TIME_MIN);
     if (!interruptible_delay_minutes(HOLD_TIME_MIN)) {
         goto system_stop;
     }
 
     // 階段三：斜坡下降
-    printf("\n【階段 3】電壓斜坡下降(每 %d 個週期下降一次)\n", PERIODS_BEFORE_VOLTAGE_DROP);
-    printf("從 %.1fV 下降至 %.1fV\n", (double)TARGET_VOLTAGE_V, (double)FINAL_VOLTAGE_V);
+    // printf("\n【階段 3】電壓斜坡下降(每 %d 個週期下降一次)\n", PERIODS_BEFORE_VOLTAGE_DROP);
 
+    // printf("從 %.1fV 下降至 %.1fV\n", (double)TARGET_VOLTAGE_V, (double)FINAL_VOLTAGE_V);
+
+    LOG_DBG("Stage 3: Voltage ramp down (drop every %d periods)", PERIODS_BEFORE_VOLTAGE_DROP);
+    LOG_DBG("Dropping from %.1f V to %.1f V", (double)TARGET_VOLTAGE_V, (double)FINAL_VOLTAGE_V);
     current_voltage = TARGET_VOLTAGE_V;
 
     while (current_voltage > FINAL_VOLTAGE_V + 0.01f) {
@@ -1344,26 +1369,36 @@ void system_stop(void) {
     request_stop = false;
     gpio_pin_set_dt(&led2, 0);
     
-    printk("\n========================================\n");
-    printk("  系統已停止\n");
-    printk("========================================\n");
-    printk("SBB0 已關閉，電流記錄已停止\n");
-    printk("按 Button 1 可重新開始\n\n");
+    // printk("\n========================================\n");
+    // printk("  系統已停止\n");
+    // printk("========================================\n");
+    // printk("SBB0 已關閉，電流記錄已停止\n");
+    // printk("按 Button 1 可重新開始\n\n");
+    LOG_INF("System stopped. SBB0 closed, current logging stopped.");
 }
 
 /* ============ 主函數 ============ */
 int main(void) {
     int ret;
+    // while (1) {
+    //     thread_analyzer_print();  // 印出所有 thread 的 stack 狀態
+    //     k_sleep(K_SECONDS(5));    // 每 5 秒印一次
+    // }
+    // printk("\n");
+    // printk("========================================\n");
+    // printk("  MAX77643 電壓控制 + INA219 電流記錄\n");
+    // printk("========================================\n");
+    // printk("Button 1: 開始（電壓輸出 + 電流記錄）\n");
+    // printk("Button 2: 停止（關閉電壓 + 停止記錄）\n");
+    // printk("LED1: SBB0 輸出狀態\n");
+    // printk("LED2: 系統運行中\n");
+    // printk("========================================\n\n");
+    LOG_INF("MAX77643 Voltage Control + INA219 Current Logging");
+    LOG_INF("Button 1: Start (voltage output + current logging)");
+    LOG_INF("Button 2: Stop (shut down voltage + stop logging)");
+    LOG_INF("LED1: SBB0 output status");
+    LOG_INF("LED2: System running status");
 
-    printk("\n");
-    printk("========================================\n");
-    printk("  MAX77643 電壓控制 + INA219 電流記錄\n");
-    printk("========================================\n");
-    printk("Button 1: 開始（電壓輸出 + 電流記錄）\n");
-    printk("Button 2: 停止（關閉電壓 + 停止記錄）\n");
-    printk("LED1: SBB0 輸出狀態\n");
-    printk("LED2: 系統運行中\n");
-    printk("========================================\n\n");
 
     // 初始化 MAX77643
     k_mutex_lock(&i2c_mutex, K_FOREVER);
@@ -1371,29 +1406,35 @@ int main(void) {
     k_mutex_unlock(&i2c_mutex);
     
     if (ret != MAX77643_NO_ERROR) {
-        printk("MAX77643 初始化失敗: %d\n", ret);
+        // printk("MAX77643 初始化失敗: %d\n", ret);
+        LOG_ERR("Failed to initialize MAX77643: %d", ret);
         return ret;
     }
-    printk("MAX77643 初始化成功\n");
+    // printk("MAX77643 初始化成功\n");
+    LOG_INF("MAX77643 initialized successfully");
 
     // 初始化 INA219
     ret = init_ina219();
     if (ret != 0) {
-        printk("INA219 初始化失敗: %d\n", ret);
+        // printk("INA219 初始化失敗: %d\n", ret);
+        LOG_ERR("Failed to initialize INA219: %d", ret);
         return ret;
     }
 
     // 初始化 GPIO
     ret = init_gpio();
     if (ret != 0) {
-        printk("GPIO 初始化失敗: %d\n", ret);
+        // printk("GPIO 初始化失敗: %d\n", ret);
+        LOG_ERR("Failed to initialize GPIO: %d", ret);
         return ret;
     }
-    printk("GPIO 初始化成功\n");
+    // printk("GPIO 初始化成功\n");
+    LOG_INF("GPIO initialized successfully");
 
     /* ====== 初始化週期檢測器 ====== */
     period_detector_init(&period_detector, PERIOD_DETECT_METHOD);
-    printk("週期檢測器初始化成功\n");
+    // printk("週期檢測器初始化成功\n");
+    LOG_INF("Period detector initialized successfully");
 
     // 創建 INA219 執行緒
     ina219_tid = k_thread_create(&ina219_thread_data,
@@ -1405,12 +1446,14 @@ int main(void) {
                                   0,
                                   K_NO_WAIT);
     if (!ina219_tid) {
-        printk("創建 INA219 執行緒失敗\n");
+        // printk("創建 INA219 執行緒失敗\n");
+        LOG_ERR("Failed to create INA219 thread");
         return -1;
     }
     k_thread_name_set(ina219_tid, "ina219_reader");
 
-    printk("\n系統就緒，按 Button 1 開始...\n\n");
+    // printk("\n系統就緒，按 Button 1 開始...\n\n");
+    LOG_INF("System ready, press Button 1 to start...");
 
     // 主循環
     while (true) {

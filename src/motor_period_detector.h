@@ -19,19 +19,19 @@
 #include <stdint.h>
 
 /* ============ 配置參數 ============ */
-#define PERIOD_BUFFER_SIZE      3000     // 一個週期內最大樣本數
-#define MIN_PERIOD_MS           50     // 最小有效週期 (ms)
-#define MAX_PERIOD_MS           1000    // 最大有效週期 (ms)
+#define PERIOD_BUFFER_SIZE      5000     // 一個週期內最大樣本數
+#define MIN_PERIOD_MS           300     // 最小有效週期 (ms)
+#define MAX_PERIOD_MS           6000    // 最大有效週期 (ms)
 #define PEAK_DETECTION_WINDOW   7       // 峰值檢測窗口大小
 #define VALLEY_DETECTION_WINDOW 7       // 谷值檢測窗口大小
 #define MIN_SAMPLES_PER_PERIOD  10      // 每週期最少樣本數
 
 /* Peak Prominence 參數 */
-#define MIN_PROMINENCE_MA       0.5f    // 最小峰值突出度 (mA)|新增：20260101
+#define MIN_PROMINENCE_MA       3.0f    // 最小峰值突出度 (mA)|新增：20260101
 
 
 /* AC/DC 計算參數 */
-#define AC_DC_WINDOW_SIZE       1       // 峰值/谷值前後各取幾個樣本（總共 2*N+1 個）
+#define AC_DC_WINDOW_SIZE       2       // 峰值/谷值前後各取幾個樣本（總共 2*N+1 個）
 #define AC_THRESHOLD_PERCENT    0.9f   // ← 新增：AC 百分比閾值（90% = 谷值 + 90% × (峰值-谷值)）
 
 

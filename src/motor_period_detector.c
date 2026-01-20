@@ -168,7 +168,7 @@ static bool calculate_dc_current(motor_period_detector_t *detector,
     int end_idx = valley_idx + window;
     
     /* 檢查邊界 */
-    if (start_idx < 0 || end_idx >= detector->buffer_idx) {
+    if (start_idx < 0 || end_idx >= detector->buffer_idx) { //谷值不能太接近開頭或結尾
         return false;
     }
     

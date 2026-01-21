@@ -20,18 +20,18 @@
 
 /* ============ 配置參數 ============ */
 #define PERIOD_BUFFER_SIZE      5000     // 一個週期內最大樣本數
-#define MIN_PERIOD_MS           300     // 最小有效週期 (ms)
-#define MAX_PERIOD_MS           6000    // 最大有效週期 (ms)
-#define PEAK_DETECTION_WINDOW   7       // 峰值檢測窗口大小
-#define VALLEY_DETECTION_WINDOW 7       // 谷值檢測窗口大小
-#define MIN_SAMPLES_PER_PERIOD  10      // 每週期最少樣本數
+#define MIN_PERIOD_MS           100     // 最小有效週期 (ms) 60rpm:300/300rpm：100/1500rpm：20
+#define MAX_PERIOD_MS           1200    // 最大有效週期 (ms) 60rpm:6000/300rpm：1200/1500rpm：240
+#define PEAK_DETECTION_WINDOW   4       // 峰值檢測窗口大小 60rpm:7/300rpm:5/1500rpm:2
+#define VALLEY_DETECTION_WINDOW 4       // 谷值檢測窗口大小 60rpm:7/300rpm:5/1500rpm:2
+#define MIN_SAMPLES_PER_PERIOD  5      // 每週期最少樣本數
 
 /* Peak Prominence 參數 */
-#define MIN_PROMINENCE_MA       3.0f    // 最小峰值突出度 (mA)|新增：20260101
+#define MIN_PROMINENCE_MA       1.0f    // 最小峰值突出度 (mA)|新增：20260101 60rpm:3.0f/300rpm:0.5f/1500rpm:0.1f
 
 
 /* AC/DC 計算參數 */
-#define AC_DC_WINDOW_SIZE       2       // 峰值/谷值前後各取幾個樣本（總共 2*N+1 個）
+#define AC_DC_WINDOW_SIZE       1       // 峰值/谷值前後各取幾個樣本（總共 2*N+1 個）
 #define AC_THRESHOLD_PERCENT    0.9f   // ← 新增：AC 百分比閾值（90% = 谷值 + 90% × (峰值-谷值)）
 
 
